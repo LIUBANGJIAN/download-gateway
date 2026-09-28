@@ -1,0 +1,40 @@
+﻿2026-09-28T10:32:49.4434376Z Post job cleanup.
+2026-09-28T10:32:49.5569298Z ##[group]Cache Configuration
+2026-09-28T10:32:49.5569760Z Cache Provider:
+2026-09-28T10:32:49.5570049Z     github
+2026-09-28T10:32:49.5570293Z Workspaces:
+2026-09-28T10:32:49.5570661Z     /home/runner/work/download-gateway/download-gateway
+2026-09-28T10:32:49.5571117Z Cache Paths:
+2026-09-28T10:32:49.5571548Z     /home/runner/.cargo/bin
+2026-09-28T10:32:49.5571923Z     /home/runner/.cargo/.crates.toml
+2026-09-28T10:32:49.5572314Z     /home/runner/.cargo/.crates2.json
+2026-09-28T10:32:49.5572674Z     /home/runner/.cargo/registry
+2026-09-28T10:32:49.5572989Z     /home/runner/.cargo/git
+2026-09-28T10:32:49.5573371Z     /home/runner/work/download-gateway/download-gateway/target
+2026-09-28T10:32:49.5573885Z Restore Key:
+2026-09-28T10:32:49.5574184Z     v0-rust-test-Linux-x64-6ff13d87
+2026-09-28T10:32:49.5574544Z Cache Key:
+2026-09-28T10:32:49.5574758Z     v0-rust-test-Linux-x64-6ff13d87-12be1066
+2026-09-28T10:32:49.5575028Z .. Prefix:
+2026-09-28T10:32:49.5575237Z   - v0-rust-test-Linux-x64
+2026-09-28T10:32:49.5575567Z .. Environment considered:
+2026-09-28T10:32:49.5575790Z   - Rust Versions:
+2026-09-28T10:32:49.5576103Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-28T10:32:49.5576452Z   - CARGO_HOME
+2026-09-28T10:32:49.5576649Z   - CARGO_INCREMENTAL
+2026-09-28T10:32:49.5576899Z   - CARGO_TERM_COLOR
+2026-09-28T10:32:49.5577109Z .. Lockfiles considered:
+2026-09-28T10:32:49.5577409Z   - /home/runner/work/download-gateway/download-gateway/Cargo.lock
+2026-09-28T10:32:49.5577813Z   - /home/runner/work/download-gateway/download-gateway/Cargo.toml
+2026-09-28T10:32:49.5578268Z   - /home/runner/work/download-gateway/download-gateway/crates/bitcomet-api/Cargo.toml
+2026-09-28T10:32:49.5578798Z   - /home/runner/work/download-gateway/download-gateway/crates/dispatch-core/Cargo.toml
+2026-09-28T10:32:49.5579398Z ##[endgroup]
+2026-09-28T10:32:49.5579508Z 
+2026-09-28T10:32:50.5209081Z ... Cleaning /home/runner/work/download-gateway/download-gateway/target ...
+2026-09-28T10:32:50.5635965Z ... Cleaning cargo registry (cache-all-crates: false) ...
+2026-09-28T10:32:51.1469238Z ... Cleaning cargo/bin ...
+2026-09-28T10:32:51.1485541Z ... Cleaning cargo git cache ...
+2026-09-28T10:32:51.1490448Z ... Saving cache ...
+2026-09-28T10:32:51.1642007Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/download-gateway/download-gateway --files-from manifest.txt --use-compress-program zstdmt
+2026-09-28T10:32:53.9373946Z Sent 31106796 of 232433388 (13.4%), 29.6 MBs/sec
+2026-09-28T10:32:54.5782531Z Sent 232433388 of 232433388 (100.0%), 135.0 MBs/sec

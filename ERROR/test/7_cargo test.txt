@@ -1,0 +1,242 @@
+﻿2026-09-28T10:32:27.1555772Z ##[group]Run cargo test --all --locked
+2026-09-28T10:32:27.1556223Z [36;1mcargo test --all --locked[0m
+2026-09-28T10:32:27.1594855Z shell: /usr/bin/bash -e {0}
+2026-09-28T10:32:27.1595235Z env:
+2026-09-28T10:32:27.1595543Z   CARGO_TERM_COLOR: always
+2026-09-28T10:32:27.1595899Z   IMAGE: LIUBANGJIAN/download-gateway
+2026-09-28T10:32:27.1596292Z   CARGO_HOME: /home/runner/.cargo
+2026-09-28T10:32:27.1596678Z   CARGO_INCREMENTAL: 0
+2026-09-28T10:32:27.1596988Z   CACHE_ON_FAILURE: false
+2026-09-28T10:32:27.1597321Z ##[endgroup]
+2026-09-28T10:32:27.2971657Z [1m[92m   Compiling[0m pin-project-lite v0.2.17
+2026-09-28T10:32:27.2972601Z [1m[92m   Compiling[0m libc v0.2.189
+2026-09-28T10:32:27.2973449Z [1m[92m   Compiling[0m bytes v1.12.1
+2026-09-28T10:32:27.3004963Z [1m[92m   Compiling[0m itoa v1.0.18
+2026-09-28T10:32:27.3414706Z [1m[92m   Compiling[0m cfg-if v1.0.5
+2026-09-28T10:32:27.3872952Z [1m[92m   Compiling[0m once_cell v1.21.4
+2026-09-28T10:32:27.4397508Z [1m[92m   Compiling[0m zerofrom v0.1.8
+2026-09-28T10:32:27.5037919Z [1m[92m   Compiling[0m stable_deref_trait v1.2.1
+2026-09-28T10:32:27.5362241Z [1m[92m   Compiling[0m smallvec v1.16.2
+2026-09-28T10:32:27.5396985Z [1m[92m   Compiling[0m yoke v0.8.3
+2026-09-28T10:32:27.6663183Z [1m[92m   Compiling[0m futures-core v0.3.34
+2026-09-28T10:32:27.7005679Z [1m[92m   Compiling[0m foldhash v0.2.0
+2026-09-28T10:32:27.7573069Z [1m[92m   Compiling[0m zerovec v0.11.8
+2026-09-28T10:32:27.8113038Z [1m[92m   Compiling[0m hashbrown v0.17.1
+2026-09-28T10:32:27.9213976Z [1m[92m   Compiling[0m tracing-core v0.1.36
+2026-09-28T10:32:28.1594921Z [1m[92m   Compiling[0m errno v0.3.14
+2026-09-28T10:32:28.2753645Z [1m[92m   Compiling[0m signal-hook-registry v1.4.8
+2026-09-28T10:32:28.2892630Z [1m[92m   Compiling[0m socket2 v0.6.5
+2026-09-28T10:32:28.3333173Z [1m[92m   Compiling[0m mio v1.2.3
+2026-09-28T10:32:28.4463406Z [1m[92m   Compiling[0m typenum v1.20.1
+2026-09-28T10:32:28.5023017Z [1m[92m   Compiling[0m tracing v0.1.44
+2026-09-28T10:32:28.6663321Z [1m[92m   Compiling[0m tokio v1.53.1
+2026-09-28T10:32:28.7603041Z [1m[92m   Compiling[0m http v1.5.0
+2026-09-28T10:32:28.8053109Z [1m[92m   Compiling[0m serde_core v1.0.229
+2026-09-28T10:32:29.2203812Z [1m[92m   Compiling[0m hybrid-array v0.4.15
+2026-09-28T10:32:29.6983028Z [1m[92m   Compiling[0m tinystr v0.8.4
+2026-09-28T10:32:29.8033149Z [1m[92m   Compiling[0m slab v0.4.12
+2026-09-28T10:32:29.8269859Z [1m[92m   Compiling[0m litemap v0.8.3
+2026-09-28T10:32:29.9193352Z [1m[92m   Compiling[0m writeable v0.6.4
+2026-09-28T10:32:29.9618011Z [1m[92m   Compiling[0m http-body v1.1.0
+2026-09-28T10:32:30.0485706Z [1m[92m   Compiling[0m zerotrie v0.2.5
+2026-09-28T10:32:30.1123467Z [1m[92m   Compiling[0m icu_locale_core v2.1.1
+2026-09-28T10:32:30.2844796Z [1m[92m   Compiling[0m potential_utf v0.1.6
+2026-09-28T10:32:30.3723333Z [1m[92m   Compiling[0m percent-encoding v2.3.2
+2026-09-28T10:32:30.5003129Z [1m[92m   Compiling[0m bitflags v2.13.2
+2026-09-28T10:32:30.6603123Z [1m[92m   Compiling[0m icu_collections v2.1.1
+2026-09-28T10:32:30.8103701Z [1m[92m   Compiling[0m icu_provider v2.1.1
+2026-09-28T10:32:31.0303681Z [1m[92m   Compiling[0m crypto-common v0.2.2
+2026-09-28T10:32:31.0604695Z [1m[92m   Compiling[0m tower-service v0.3.3
+2026-09-28T10:32:31.1032674Z [1m[92m   Compiling[0m futures-task v0.3.34
+2026-09-28T10:32:31.1123545Z [1m[92m   Compiling[0m equivalent v1.0.2
+2026-09-28T10:32:31.1578477Z [1m[92m   Compiling[0m zeroize v1.9.0
+2026-09-28T10:32:31.2212754Z [1m[92m   Compiling[0m futures-sink v0.3.34
+2026-09-28T10:32:31.2619151Z [1m[92m   Compiling[0m rustls-pki-types v1.15.1
+2026-09-28T10:32:31.2893621Z [1m[92m   Compiling[0m futures-util v0.3.34
+2026-09-28T10:32:31.6762815Z [1m[92m   Compiling[0m indexmap v2.14.2
+2026-09-28T10:32:32.0743812Z [1m[92m   Compiling[0m icu_normalizer_data v2.1.1
+2026-09-28T10:32:32.1092788Z [1m[92m   Compiling[0m zmij v1.0.23
+2026-09-28T10:32:32.2517685Z [1m[92m   Compiling[0m tokio-util v0.7.19
+2026-09-28T10:32:32.4219643Z [1m[92m   Compiling[0m icu_properties_data v2.1.2
+2026-09-28T10:32:32.5107099Z [1m[92m   Compiling[0m getrandom v0.2.17
+2026-09-28T10:32:32.6332750Z [1m[92m   Compiling[0m cmov v0.5.4
+2026-09-28T10:32:32.7652843Z [1m[92m   Compiling[0m untrusted v0.9.0
+2026-09-28T10:32:32.8212875Z [1m[92m   Compiling[0m memchr v2.8.3
+2026-09-28T10:32:32.8563286Z [1m[92m   Compiling[0m try-lock v0.2.5
+2026-09-28T10:32:32.8960411Z [1m[92m   Compiling[0m atomic-waker v1.1.2
+2026-09-28T10:32:32.9025516Z [1m[92m   Compiling[0m fnv v1.0.7
+2026-09-28T10:32:32.9411054Z [1m[92m   Compiling[0m h2 v0.4.19
+2026-09-28T10:32:32.9532405Z [1m[92m   Compiling[0m want v0.3.1
+2026-09-28T10:32:33.0462722Z [1m[92m   Compiling[0m ring v0.17.14
+2026-09-28T10:32:33.5459922Z [1m[92m   Compiling[0m serde_json v1.0.151
+2026-09-28T10:32:34.2089746Z [1m[92m   Compiling[0m ctutils v0.4.2
+2026-09-28T10:32:34.3589680Z [1m[92m   Compiling[0m serde v1.0.229
+2026-09-28T10:32:34.8452721Z [1m[92m   Compiling[0m icu_properties v2.1.2
+2026-09-28T10:32:34.8638439Z [1m[92m   Compiling[0m icu_normalizer v2.1.1
+2026-09-28T10:32:35.3382809Z [1m[92m   Compiling[0m httparse v1.10.1
+2026-09-28T10:32:35.4105946Z [1m[92m   Compiling[0m block-buffer v0.12.1
+2026-09-28T10:32:35.5101279Z [1m[92m   Compiling[0m sync_wrapper v1.0.2
+2026-09-28T10:32:35.5602777Z [1m[92m   Compiling[0m futures-channel v0.3.34
+2026-09-28T10:32:35.5793980Z [1m[92m   Compiling[0m const-oid v0.10.2
+2026-09-28T10:32:35.7154335Z [1m[92m   Compiling[0m httpdate v1.0.3
+2026-09-28T10:32:35.7193276Z [1m[92m   Compiling[0m tower-layer v0.3.3
+2026-09-28T10:32:35.8339647Z [1m[92m   Compiling[0m hyper v1.11.1
+2026-09-28T10:32:35.8852811Z [1m[92m   Compiling[0m idna_adapter v1.2.1
+2026-09-28T10:32:35.9483176Z [1m[92m   Compiling[0m digest v0.11.3
+2026-09-28T10:32:36.0123143Z [1m[92m   Compiling[0m rustls-webpki v0.103.15
+2026-09-28T10:32:36.0637573Z [1m[92m   Compiling[0m getrandom v0.4.3
+2026-09-28T10:32:36.1760090Z [1m[92m   Compiling[0m form_urlencoded v1.2.2
+2026-09-28T10:32:36.2922957Z [1m[92m   Compiling[0m utf8_iter v1.0.4
+2026-09-28T10:32:36.3400043Z [1m[92m   Compiling[0m subtle v2.6.1
+2026-09-28T10:32:36.3832921Z [1m[92m   Compiling[0m base64 v0.23.1
+2026-09-28T10:32:36.4252889Z [1m[92m   Compiling[0m ipnet v2.12.2
+2026-09-28T10:32:36.7907187Z [1m[92m   Compiling[0m rustls v0.23.45
+2026-09-28T10:32:36.9139313Z [1m[92m   Compiling[0m idna v1.1.0
+2026-09-28T10:32:37.0772846Z [1m[92m   Compiling[0m hyper-util v0.1.21
+2026-09-28T10:32:37.6802844Z [1m[92m   Compiling[0m thiserror v2.0.21
+2026-09-28T10:32:37.7253175Z [1m[92m   Compiling[0m tower v0.5.3
+2026-09-28T10:32:37.7322546Z [1m[92m   Compiling[0m http-body-util v0.1.5
+2026-09-28T10:32:37.9262842Z [1m[92m   Compiling[0m log v0.4.34
+2026-09-28T10:32:38.0812854Z [1m[92m   Compiling[0m cpufeatures v0.3.1
+2026-09-28T10:32:38.1102459Z [1m[92m   Compiling[0m url v2.5.8
+2026-09-28T10:32:38.1953671Z [1m[92m   Compiling[0m webpki-roots v1.0.9
+2026-09-28T10:32:38.2596905Z [1m[92m   Compiling[0m inout v0.2.2
+2026-09-28T10:32:38.3314956Z [1m[92m   Compiling[0m ryu v1.0.23
+2026-09-28T10:32:38.4523276Z [1m[92m   Compiling[0m serde_urlencoded v0.7.1
+2026-09-28T10:32:38.6362959Z [1m[92m   Compiling[0m tower-http v0.6.11
+2026-09-28T10:32:38.6912990Z [1m[92m   Compiling[0m cipher v0.5.2
+2026-09-28T10:32:38.8412975Z [1m[92m   Compiling[0m hmac v0.13.0
+2026-09-28T10:32:38.9352818Z [1m[92m   Compiling[0m cpubits v0.1.1
+2026-09-28T10:32:38.9579001Z [1m[92m   Compiling[0m base64 v0.22.1
+2026-09-28T10:32:38.9605981Z [1m[92m   Compiling[0m aes v0.9.2
+2026-09-28T10:32:38.9682677Z [1m[92m   Compiling[0m pbkdf2 v0.13.0
+2026-09-28T10:32:39.0152467Z [1m[92m   Compiling[0m sha1 v0.11.0
+2026-09-28T10:32:39.2052769Z [1m[92m   Compiling[0m sha2 v0.11.0
+2026-09-28T10:32:39.2207598Z [1m[92m   Compiling[0m uuid v1.26.1
+2026-09-28T10:32:39.2842867Z [1m[92m   Compiling[0m libsqlite3-sys v0.38.2
+2026-09-28T10:32:39.4373162Z [1m[92m   Compiling[0m hashlink v0.12.2
+2026-09-28T10:32:39.5662983Z [1m[92m   Compiling[0m linux-raw-sys v0.12.1
+2026-09-28T10:32:39.6684901Z [1m[92m   Compiling[0m fallible-streaming-iterator v0.1.9
+2026-09-28T10:32:39.7523295Z [1m[92m   Compiling[0m fallible-iterator v0.3.0
+2026-09-28T10:32:39.8633057Z [1m[92m   Compiling[0m tokio-rustls v0.26.6
+2026-09-28T10:32:40.0142913Z [1m[92m   Compiling[0m rustix v1.1.5
+2026-09-28T10:32:40.0354192Z [1m[92m   Compiling[0m rusqlite v0.40.2
+2026-09-28T10:32:40.0612498Z [1m[92m   Compiling[0m hyper-rustls v0.27.10
+2026-09-28T10:32:40.2732701Z [1m[92m   Compiling[0m reqwest v0.12.28
+2026-09-28T10:32:41.2852772Z [1m[92m   Compiling[0m anyhow v1.0.104
+2026-09-28T10:32:41.5903125Z [1m[92m   Compiling[0m bitcomet-api v0.1.0 (/home/runner/work/download-gateway/download-gateway/crates/bitcomet-api)
+2026-09-28T10:32:41.7962936Z [1m[92m   Compiling[0m regex-syntax v0.8.11
+2026-09-28T10:32:42.2592974Z [1m[92m   Compiling[0m fastrand v2.5.0
+2026-09-28T10:32:42.4192791Z [1m[92m   Compiling[0m tempfile v3.27.0
+2026-09-28T10:32:42.7853436Z [1m[92m   Compiling[0m regex-automata v0.4.18
+2026-09-28T10:32:43.1223072Z [1m[92m   Compiling[0m lazy_static v1.5.0
+2026-09-28T10:32:43.1551772Z [1m[92m   Compiling[0m mime v0.3.17
+2026-09-28T10:32:43.3573974Z [1m[92m   Compiling[0m axum-core v0.5.6
+2026-09-28T10:32:44.0074067Z [1m[92m   Compiling[0m sharded-slab v0.1.7
+2026-09-28T10:32:44.4562953Z [1m[92m   Compiling[0m matchers v0.2.0
+2026-09-28T10:32:44.5203669Z [1m[92m   Compiling[0m dispatch-core v0.1.0 (/home/runner/work/download-gateway/download-gateway/crates/dispatch-core)
+2026-09-28T10:32:44.7224722Z [1m[92m   Compiling[0m tracing-log v0.2.0
+2026-09-28T10:32:44.8868408Z [1m[92m   Compiling[0m serde_path_to_error v0.1.20
+2026-09-28T10:32:44.8953313Z [1m[92m   Compiling[0m thread_local v1.1.10
+2026-09-28T10:32:45.0290451Z [1m[92m   Compiling[0m matchit v0.8.4
+2026-09-28T10:32:45.0692851Z [1m[92m   Compiling[0m nu-ansi-term v0.50.3
+2026-09-28T10:32:45.3113004Z [1m[92m   Compiling[0m tracing-subscriber v0.3.23
+2026-09-28T10:32:45.3325112Z [1m[92m   Compiling[0m axum v0.8.9
+2026-09-28T10:32:48.3412912Z [1m[92m   Compiling[0m download-gateway v0.1.0 (/home/runner/work/download-gateway/download-gateway)
+2026-09-28T10:32:48.6057058Z [1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 21.43s
+2026-09-28T10:32:48.6162689Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bitcomet_api-00813be1964655af)
+2026-09-28T10:32:48.6176772Z 
+2026-09-28T10:32:48.6176923Z running 35 tests
+2026-09-28T10:32:48.6193574Z test addtask::tests::endpoint_matches_contract ... ok
+2026-09-28T10:32:48.6194389Z test addtask::tests::http_and_ftp_are_http_kind ... ok
+2026-09-28T10:32:48.6197323Z test addtask::tests::collect_dedups_across_inputs ... ok
+2026-09-28T10:32:48.6198100Z test addtask::tests::magnet_prefix_wins_over_torrent_suffix ... ok
+2026-09-28T10:32:48.6198895Z test addtask::tests::plain_torrent_url_is_torrent ... ok
+2026-09-28T10:32:48.6199658Z test addtask::tests::split_drops_blank_and_keeps_chinese_separators ... ok
+2026-09-28T10:32:48.6200536Z test addtask::tests::split_handles_all_separators_and_does_not_split_on_space ... ok
+2026-09-28T10:32:48.6201599Z test addtask::tests::torrent_with_query_or_fragment_is_torrent ... ok
+2026-09-28T10:32:48.6202404Z test client::tests::check_error_code_accepts_missing_field ... ok
+2026-09-28T10:32:48.6203155Z test client::tests::check_error_code_rejects_failure ... ok
+2026-09-28T10:32:48.6203901Z test client::tests::client_is_constructible_without_network ... ok
+2026-09-28T10:32:48.6205092Z test client::tests::live_login_and_fetch_task_list ... ignored, 需要真实 BitComet 节点与凭据（见测试文档注释）
+2026-09-28T10:32:48.6206021Z test client::tests::call_without_login_is_rejected_locally ... ok
+2026-09-28T10:32:48.6206730Z test client::tests::ok_code_is_case_insensitive ... ok
+2026-09-28T10:32:48.6207454Z test clientid::tests::state_dir_env_takes_priority ... ok
+2026-09-28T10:32:48.6208315Z test clientid::tests::two_uuids_differ ... ok
+2026-09-28T10:32:48.6208910Z test clientid::tests::uuid_has_v4_shape ... ok
+2026-09-28T10:32:48.6209542Z test profile::tests::default_device_name_is_used ... ok
+2026-09-28T10:32:48.6210222Z test profile::tests::trailing_slashes_are_stripped ... ok
+2026-09-28T10:32:48.6210907Z test clientid::tests::creates_then_reuses_client_id ... ok
+2026-09-28T10:32:48.6211795Z test client::tests::url_join_has_no_double_slash ... ok
+2026-09-28T10:32:48.6212494Z test rncryptor::tests::empty_password_is_rejected ... ok
+2026-09-28T10:32:48.6213138Z test rncryptor::tests::login_payload_shape ... ok
+2026-09-28T10:32:48.6213849Z test rncryptor::tests::malformed_input_is_rejected_gracefully ... ok
+2026-09-28T10:32:48.6214613Z test rncryptor::tests::padding_is_exactly_pkcs7 ... ok
+2026-09-28T10:32:48.6219479Z test clientid::tests::empty_file_is_treated_as_missing ... ok
+2026-09-28T10:32:48.8029963Z test rncryptor::tests::decrypts_go_generated_ciphertext ... ok
+2026-09-28T10:32:48.8062042Z test rncryptor::tests::binary_layout_matches_spec ... ok
+2026-09-28T10:32:48.9911903Z test rncryptor::tests::round_trip_with_chinese_and_utf8 ... ok
+2026-09-28T10:32:48.9939103Z test rncryptor::tests::round_trip_preserves_plaintext ... ok
+2026-09-28T10:32:48.9939675Z test tests::client_builds ... ok
+2026-09-28T10:32:48.9940170Z test tests::user_agent_carries_crate_version ... ok
+2026-09-28T10:32:49.0455457Z test rncryptor::tests::tampered_ciphertext_fails_integrity ... ok
+2026-09-28T10:32:49.1222724Z test rncryptor::tests::two_encryptions_of_same_plaintext_differ ... ok
+2026-09-28T10:32:49.1747131Z test rncryptor::tests::wrong_password_fails_integrity ... ok
+2026-09-28T10:32:49.1747492Z 
+2026-09-28T10:32:49.1747808Z test result: ok. 34 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.56s
+2026-09-28T10:32:49.1748237Z 
+2026-09-28T10:32:49.1752936Z [1m[92m     Running[0m tests/client_id_persistence.rs (target/debug/deps/client_id_persistence-83a3f5e2ae74a821)
+2026-09-28T10:32:49.1766634Z 
+2026-09-28T10:32:49.1766950Z running 3 tests
+2026-09-28T10:32:49.1774040Z test default_profile_persists_under_state_dir_env ... ok
+2026-09-28T10:32:49.1774656Z test explicit_path_is_persisted_and_stable ... ok
+2026-09-28T10:32:49.1775153Z test existing_id_is_reused_not_regenerated ... ok
+2026-09-28T10:32:49.1775387Z 
+2026-09-28T10:32:49.1775620Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-28T10:32:49.1775953Z 
+2026-09-28T10:32:49.1776787Z [1m[92m     Running[0m tests/live_production_path.rs (target/debug/deps/live_production_path-2b7f7c59299c8181)
+2026-09-28T10:32:49.1790479Z 
+2026-09-28T10:32:49.1790840Z running 1 test
+2026-09-28T10:32:49.1791898Z test live_production_path_persists_client_id_and_logs_in ... ignored, 需要真实 BitComet 节点与凭据（DISPATCH_TEST_NODE_*）
+2026-09-28T10:32:49.1792960Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/dispatch_core-6958a4767270977c)
+2026-09-28T10:32:49.1793462Z 
+2026-09-28T10:32:49.1793776Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-28T10:32:49.1794133Z 
+2026-09-28T10:32:49.1804462Z 
+2026-09-28T10:32:49.1804678Z running 11 tests
+2026-09-28T10:32:49.1827679Z test store::actor::tests::writes_are_visible_to_subsequent_reads ... ok
+2026-09-28T10:32:49.1832607Z test store::actor::tests::foreign_keys_are_enforced ... ok
+2026-09-28T10:32:49.1844127Z test store::actor::tests::unique_violation_surfaces_as_error ... ok
+2026-09-28T10:32:49.1849268Z test store::migrate::tests::applies_in_version_order_regardless_of_fs_order ... ok
+2026-09-28T10:32:49.1850032Z test store::migrate::tests::missing_dir_yields_empty_plan ... ok
+2026-09-28T10:32:49.1850927Z test store::migrate::tests::failed_migration_rolls_back_completely ... ok
+2026-09-28T10:32:49.1851926Z test store::migrate::tests::applies_once_then_is_idempotent ... ok
+2026-09-28T10:32:49.1860840Z test store::actor::tests::concurrent_writes_are_serialized_without_busy ... ok
+2026-09-28T10:32:49.1861988Z test store::migrate::tests::works_when_migration_creates_its_own_schema_migrations ... ok
+2026-09-28T10:32:49.1862994Z test store::migrate::tests::rejects_malformed_filename ... ok
+2026-09-28T10:32:49.1932926Z test store::migrate::tests::real_v1_migration_produces_14_tables_and_17_indexes ... ok
+2026-09-28T10:32:49.1933358Z 
+2026-09-28T10:32:49.1933681Z test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-09-28T10:32:49.1934144Z 
+2026-09-28T10:32:49.1937004Z [1m[92m     Running[0m unittests src/main.rs (target/debug/deps/download_gateway-aca6c644da254e8e)
+2026-09-28T10:32:49.1945864Z 
+2026-09-28T10:32:49.1947457Z running 4 tests
+2026-09-28T10:32:49.1950021Z test config::tests::env_or_reads_real_value ... ok
+2026-09-28T10:32:49.1950593Z test config::tests::env_or_falls_back_when_unset ... ok
+2026-09-28T10:32:49.1951113Z test config::tests::defaults_match_design_ports ... ok
+2026-09-28T10:32:49.1951722Z test config::tests::env_or_treats_blank_as_unset ... ok
+2026-09-28T10:32:49.1952056Z 
+2026-09-28T10:32:49.1952400Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-28T10:32:49.1952856Z 
+2026-09-28T10:32:49.1953169Z [1m[92m   Doc-tests[0m bitcomet_api
+2026-09-28T10:32:49.2772942Z 
+2026-09-28T10:32:49.2775480Z running 0 tests
+2026-09-28T10:32:49.2775681Z 
+2026-09-28T10:32:49.2775937Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-28T10:32:49.2776602Z 
+2026-09-28T10:32:49.2794012Z [1m[92m   Doc-tests[0m dispatch_core
+2026-09-28T10:32:49.3028452Z 
+2026-09-28T10:32:49.3029057Z running 0 tests
+2026-09-28T10:32:49.3029305Z 
+2026-09-28T10:32:49.3029708Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-28T10:32:49.3030250Z 

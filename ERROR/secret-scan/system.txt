@@ -1,0 +1,8 @@
+2026-09-28T10:31:48.5780000Z Job is about to start running on the hosted runner: GitHub Actions 1000029126
+2026-09-28T10:31:48.5740000Z Evaluating secret-scan.if
+2026-09-28T10:31:48.5740000Z Evaluating: success()
+2026-09-28T10:31:48.5740000Z Result: true
+2026-09-28T10:31:48.5780000Z Job is waiting for a hosted runner to come online.
+2026-09-28T10:31:48.5750000Z Requested labels: ubuntu-latest
+2026-09-28T10:31:48.5750000Z Job defined at: LIUBANGJIAN/download-gateway/.github/workflows/ci.yml@refs/heads/main
+2026-09-28T10:31:48.5750000Z Waiting for a runner to pick up this job...

@@ -1,0 +1,407 @@
+﻿2026-09-28T10:33:02.0469689Z Current runner version: '2.337.0'
+2026-09-28T10:33:02.0500751Z ##[group]Runner Image Provisioner
+2026-09-28T10:33:02.0501775Z Hosted Compute Agent
+2026-09-28T10:33:02.0502552Z Version: 20260828.587
+2026-09-28T10:33:02.0503199Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-28T10:33:02.0503972Z Build Date: 2026-08-28T16:44:25Z
+2026-09-28T10:33:02.0504702Z Worker ID: {d06538cb-7626-4a0f-8c4f-415b849f5b3d}
+2026-09-28T10:33:02.0505386Z Azure Region: eastus2
+2026-09-28T10:33:02.0506028Z ##[endgroup]
+2026-09-28T10:33:02.0508435Z ##[group]Operating System
+2026-09-28T10:33:02.0509554Z Ubuntu
+2026-09-28T10:33:02.0510592Z 24.04.5
+2026-09-28T10:33:02.0511154Z LTS
+2026-09-28T10:33:02.0511805Z ##[endgroup]
+2026-09-28T10:33:02.0512379Z ##[group]Runner Image
+2026-09-28T10:33:02.0512987Z Image: ubuntu-24.04-arm
+2026-09-28T10:33:02.0513728Z Version: 20260920.129.1
+2026-09-28T10:33:02.0515112Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24-arm64/20260920.129/images/ubuntu/Ubuntu2404-Arm64-Readme.md
+2026-09-28T10:33:02.0516835Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24-arm64%2F20260920.129
+2026-09-28T10:33:02.0517812Z ##[endgroup]
+2026-09-28T10:33:02.0519196Z ##[group]GITHUB_TOKEN Permissions
+2026-09-28T10:33:02.0522554Z Contents: read
+2026-09-28T10:33:02.0523335Z Metadata: read
+2026-09-28T10:33:02.0523899Z Packages: write
+2026-09-28T10:33:02.0524512Z ##[endgroup]
+2026-09-28T10:33:02.0527329Z Secret source: Actions
+2026-09-28T10:33:02.0528497Z Cache mode: write
+2026-09-28T10:33:02.0529322Z Prepare workflow directory
+2026-09-28T10:33:02.1140755Z Prepare all required actions
+2026-09-28T10:33:02.1192123Z Getting action download info
+2026-09-28T10:33:02.3415050Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-28T10:33:02.4604971Z Download action repository 'docker/setup-buildx-action@v3' (SHA:8d2750c68a42422c14e847fe6c8ac0403b4cbd6f)
+2026-09-28T10:33:02.7525243Z Download action repository 'docker/login-action@v3' (SHA:c94ce9fb468520275223c153574b00df6fe4bcc9)
+2026-09-28T10:33:03.0756790Z Download action repository 'docker/metadata-action@v5' (SHA:c299e40c65443455700f0fdfc63efafe5b349051)
+2026-09-28T10:33:03.4706471Z Download action repository 'docker/build-push-action@v6' (SHA:10e90e3645eae34f1e60eeb005ba3a3d33f178e8)
+2026-09-28T10:33:03.7757940Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-09-28T10:33:04.0015927Z Complete job name: build (linux/arm64, ubuntu-24.04-arm, arm64)
+2026-09-28T10:33:04.0845851Z ##[group]Run actions/checkout@v4
+2026-09-28T10:33:04.0847379Z with:
+2026-09-28T10:33:04.0848142Z   repository: LIUBANGJIAN/download-gateway
+2026-09-28T10:33:04.0852827Z   token: ***
+2026-09-28T10:33:04.0853538Z   ssh-strict: true
+2026-09-28T10:33:04.0854197Z   ssh-user: git
+2026-09-28T10:33:04.0854947Z   persist-credentials: true
+2026-09-28T10:33:04.0855657Z   clean: true
+2026-09-28T10:33:04.0856374Z   sparse-checkout-cone-mode: true
+2026-09-28T10:33:04.0857263Z   fetch-depth: 1
+2026-09-28T10:33:04.0857936Z   fetch-tags: false
+2026-09-28T10:33:04.0858730Z   show-progress: true
+2026-09-28T10:33:04.0859447Z   lfs: false
+2026-09-28T10:33:04.0860125Z   submodules: false
+2026-09-28T10:33:04.0861148Z   set-safe-directory: true
+2026-09-28T10:33:04.0861943Z   allow-unsafe-pr-checkout: false
+2026-09-28T10:33:04.0863332Z env:
+2026-09-28T10:33:04.0864037Z   CARGO_TERM_COLOR: always
+2026-09-28T10:33:04.0864821Z   IMAGE: LIUBANGJIAN/download-gateway
+2026-09-28T10:33:04.0865635Z ##[endgroup]
+2026-09-28T10:33:04.1777388Z Syncing repository: LIUBANGJIAN/download-gateway
+2026-09-28T10:33:04.1780687Z ##[group]Getting Git version info
+2026-09-28T10:33:04.1781960Z Working directory is '/home/runner/work/download-gateway/download-gateway'
+2026-09-28T10:33:04.1783814Z [command]/usr/bin/git version
+2026-09-28T10:33:04.1835487Z git version 2.55.0
+2026-09-28T10:33:04.1857770Z ##[endgroup]
+2026-09-28T10:33:04.1872711Z Temporarily overriding HOME='/home/runner/work/_temp/55fc16c6-2eca-4392-a8ae-8c5bd129eded' before making global git config changes
+2026-09-28T10:33:04.1875216Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-28T10:33:04.1877644Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/download-gateway/download-gateway
+2026-09-28T10:33:04.1914032Z Deleting the contents of '/home/runner/work/download-gateway/download-gateway'
+2026-09-28T10:33:04.1918591Z ##[group]Initializing the repository
+2026-09-28T10:33:04.1923713Z [command]/usr/bin/git init /home/runner/work/download-gateway/download-gateway
+2026-09-28T10:33:04.2047637Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-28T10:33:04.2052912Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-28T10:33:04.2054149Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-28T10:33:04.2055131Z hint: call:
+2026-09-28T10:33:04.2055863Z hint:
+2026-09-28T10:33:04.2056760Z hint: 	git config --global init.defaultBranch <name>
+2026-09-28T10:33:04.2057637Z hint:
+2026-09-28T10:33:04.2058964Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-28T10:33:04.2060927Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-28T10:33:04.2062507Z hint:
+2026-09-28T10:33:04.2063592Z hint: 	git branch -m <name>
+2026-09-28T10:33:04.2072992Z hint:
+2026-09-28T10:33:04.2075748Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-28T10:33:04.2077248Z Initialized empty Git repository in /home/runner/work/download-gateway/download-gateway/.git/
+2026-09-28T10:33:04.2080536Z [command]/usr/bin/git remote add origin https://github.com/LIUBANGJIAN/download-gateway
+2026-09-28T10:33:04.2101381Z ##[endgroup]
+2026-09-28T10:33:04.2103362Z ##[group]Disabling automatic garbage collection
+2026-09-28T10:33:04.2104503Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-28T10:33:04.2145645Z ##[endgroup]
+2026-09-28T10:33:04.2146894Z ##[group]Setting up auth
+2026-09-28T10:33:04.2151744Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-28T10:33:04.2198338Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-28T10:33:04.2531456Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-28T10:33:04.2568810Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-28T10:33:04.2768026Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-28T10:33:04.2800552Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-28T10:33:04.3006815Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-28T10:33:04.3064717Z ##[endgroup]
+2026-09-28T10:33:04.3066551Z ##[group]Fetching the repository
+2026-09-28T10:33:04.3072930Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +bcadf90c9154ae66b893cd082da3b236e8d7b8a5:refs/remotes/origin/main
+2026-09-28T10:33:04.5454327Z From https://github.com/LIUBANGJIAN/download-gateway
+2026-09-28T10:33:04.5456066Z  * [new ref]         bcadf90c9154ae66b893cd082da3b236e8d7b8a5 -> origin/main
+2026-09-28T10:33:04.5458953Z ##[endgroup]
+2026-09-28T10:33:04.5460106Z ##[group]Determining the checkout info
+2026-09-28T10:33:04.5461592Z ##[endgroup]
+2026-09-28T10:33:04.5466309Z [command]/usr/bin/git sparse-checkout disable
+2026-09-28T10:33:04.5535972Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-28T10:33:04.5569232Z ##[group]Checking out the ref
+2026-09-28T10:33:04.5573809Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-09-28T10:33:04.5641349Z Switched to a new branch 'main'
+2026-09-28T10:33:04.5651596Z branch 'main' set up to track 'origin/main'.
+2026-09-28T10:33:04.5654182Z ##[endgroup]
+2026-09-28T10:33:04.5697108Z [command]/usr/bin/git log -1 --format=%H
+2026-09-28T10:33:04.5720619Z bcadf90c9154ae66b893cd082da3b236e8d7b8a5
+2026-09-28T10:33:04.6043075Z ##[group]Run docker/setup-buildx-action@v3
+2026-09-28T10:33:04.6043920Z with:
+2026-09-28T10:33:04.6044524Z   driver: docker-container
+2026-09-28T10:33:04.6045123Z   use: true
+2026-09-28T10:33:04.6045601Z   keep-state: false
+2026-09-28T10:33:04.6046244Z   cache-binary: true
+2026-09-28T10:33:04.6046930Z   cleanup: true
+2026-09-28T10:33:04.6047506Z   install: false
+2026-09-28T10:33:04.6048013Z env:
+2026-09-28T10:33:04.6048483Z   CARGO_TERM_COLOR: always
+2026-09-28T10:33:04.6049251Z   IMAGE: LIUBANGJIAN/download-gateway
+2026-09-28T10:33:04.6049945Z ##[endgroup]
+2026-09-28T10:33:04.8158886Z (node:2192) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-28T10:33:04.8161154Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-28T10:33:04.8211123Z ##[group]Docker info
+2026-09-28T10:33:04.8228647Z [command]/usr/bin/docker version
+2026-09-28T10:33:04.9106237Z Client: Docker Engine - Community
+2026-09-28T10:33:04.9107184Z  Version:           28.0.4
+2026-09-28T10:33:04.9107921Z  API version:       1.48
+2026-09-28T10:33:04.9108468Z  Go version:        go1.23.7
+2026-09-28T10:33:04.9109000Z  Git commit:        b8034c0
+2026-09-28T10:33:04.9109770Z  Built:             Tue Mar 25 15:07:55 2025
+2026-09-28T10:33:04.9110751Z  OS/Arch:           linux/arm64
+2026-09-28T10:33:04.9111436Z  Context:           default
+2026-09-28T10:33:04.9111785Z 
+2026-09-28T10:33:04.9112035Z Server: Docker Engine - Community
+2026-09-28T10:33:04.9112598Z  Engine:
+2026-09-28T10:33:04.9113083Z   Version:          28.0.4
+2026-09-28T10:33:04.9113706Z   API version:      1.48 (minimum version 1.24)
+2026-09-28T10:33:04.9114474Z   Go version:       go1.23.7
+2026-09-28T10:33:04.9115040Z   Git commit:       6430e49
+2026-09-28T10:33:04.9115619Z   Built:            Tue Mar 25 15:07:55 2025
+2026-09-28T10:33:04.9116367Z   OS/Arch:          linux/arm64
+2026-09-28T10:33:04.9116972Z   Experimental:     false
+2026-09-28T10:33:04.9117567Z  containerd:
+2026-09-28T10:33:04.9118003Z   Version:          v2.3.5
+2026-09-28T10:33:04.9118678Z   GitCommit:        1294c24a7da8e5a793ed378161673abe94118892
+2026-09-28T10:33:04.9119482Z  runc:
+2026-09-28T10:33:04.9119877Z   Version:          1.5.1
+2026-09-28T10:33:04.9120798Z   GitCommit:        v1.5.1-0-g8f2685a4
+2026-09-28T10:33:04.9121488Z  docker-init:
+2026-09-28T10:33:04.9121940Z   Version:          0.19.0
+2026-09-28T10:33:04.9122524Z   GitCommit:        de40ad0
+2026-09-28T10:33:04.9145676Z [command]/usr/bin/docker info
+2026-09-28T10:33:05.0854874Z Client: Docker Engine - Community
+2026-09-28T10:33:05.0855655Z  Version:    28.0.4
+2026-09-28T10:33:05.0856300Z  Context:    default
+2026-09-28T10:33:05.0862687Z  Debug Mode: false
+2026-09-28T10:33:05.0867954Z  Plugins:
+2026-09-28T10:33:05.0868544Z   buildx: Docker Buildx (Docker Inc.)
+2026-09-28T10:33:05.0869193Z     Version:  v0.37.1
+2026-09-28T10:33:05.0869982Z     Path:     /usr/libexec/docker/cli-plugins/docker-buildx
+2026-09-28T10:33:05.0871402Z   compose: Docker Compose (Docker Inc.)
+2026-09-28T10:33:05.0872134Z     Version:  v2.38.2
+2026-09-28T10:33:05.0872850Z     Path:     /usr/libexec/docker/cli-plugins/docker-compose
+2026-09-28T10:33:05.0873457Z 
+2026-09-28T10:33:05.0873613Z Server:
+2026-09-28T10:33:05.0874188Z  Containers: 0
+2026-09-28T10:33:05.0874613Z   Running: 0
+2026-09-28T10:33:05.0875011Z   Paused: 0
+2026-09-28T10:33:05.0875493Z   Stopped: 0
+2026-09-28T10:33:05.0875931Z  Images: 6
+2026-09-28T10:33:05.0876400Z  Server Version: 28.0.4
+2026-09-28T10:33:05.0876917Z  Storage Driver: overlay2
+2026-09-28T10:33:05.0877450Z   Backing Filesystem: extfs
+2026-09-28T10:33:05.0878590Z   Supports d_type: true
+2026-09-28T10:33:05.0879085Z   Using metacopy: false
+2026-09-28T10:33:05.0879638Z   Native Overlay Diff: false
+2026-09-28T10:33:05.0880198Z   userxattr: false
+2026-09-28T10:33:05.0881249Z  Logging Driver: json-file
+2026-09-28T10:33:05.0881961Z  Cgroup Driver: systemd
+2026-09-28T10:33:05.0882496Z  Cgroup Version: 2
+2026-09-28T10:33:05.0882977Z  Plugins:
+2026-09-28T10:33:05.0883714Z   Volume: local
+2026-09-28T10:33:05.0884318Z   Network: bridge host ipvlan macvlan null overlay
+2026-09-28T10:33:05.0885644Z   Log: awslogs fluentd gcplogs gelf journald json-file local splunk syslog
+2026-09-28T10:33:05.0886689Z  Swarm: inactive
+2026-09-28T10:33:05.0887177Z  Runtimes: io.containerd.runc.v2 runc
+2026-09-28T10:33:05.0887869Z  Default Runtime: runc
+2026-09-28T10:33:05.0888398Z  Init Binary: docker-init
+2026-09-28T10:33:05.0889189Z  containerd version: 1294c24a7da8e5a793ed378161673abe94118892
+2026-09-28T10:33:05.0890017Z  runc version: v1.5.1-0-g8f2685a4
+2026-09-28T10:33:05.0890818Z  init version: de40ad0
+2026-09-28T10:33:05.0891422Z  Security Options:
+2026-09-28T10:33:05.0891884Z   apparmor
+2026-09-28T10:33:05.0892304Z   seccomp
+2026-09-28T10:33:05.0892709Z    Profile: builtin
+2026-09-28T10:33:05.0893134Z   cgroupns
+2026-09-28T10:33:05.0893616Z  Kernel Version: 6.17.0-1022-azure
+2026-09-28T10:33:05.0894245Z  Operating System: Ubuntu 24.04.5 LTS
+2026-09-28T10:33:05.0894922Z  OSType: linux
+2026-09-28T10:33:05.0895366Z  Architecture: aarch64
+2026-09-28T10:33:05.0896424Z  CPUs: 4
+2026-09-28T10:33:05.0896956Z  Total Memory: 15.57GiB
+2026-09-28T10:33:05.0897479Z  Name: runnervmoyp6c
+2026-09-28T10:33:05.0897973Z  ID: 5c0316be-096b-4181-abeb-21d253d90599
+2026-09-28T10:33:05.0898681Z  Docker Root Dir: /var/lib/docker
+2026-09-28T10:33:05.0899239Z  Debug Mode: false
+2026-09-28T10:33:05.0899746Z  Username: githubactions
+2026-09-28T10:33:05.0902330Z  Experimental: false
+2026-09-28T10:33:05.0902966Z  Insecure Registries:
+2026-09-28T10:33:05.0907361Z   ::1/128
+2026-09-28T10:33:05.0907837Z   127.0.0.0/8
+2026-09-28T10:33:05.0908425Z  Live Restore Enabled: false
+2026-09-28T10:33:05.0908852Z 
+2026-09-28T10:33:05.0909567Z ##[endgroup]
+2026-09-28T10:33:05.1473083Z ##[group]Buildx version
+2026-09-28T10:33:05.1493953Z [command]/usr/bin/docker buildx version
+2026-09-28T10:33:05.1942087Z github.com/docker/buildx v0.37.1 0b265a9f62db554fa9aba6dd19e1bd5704bc7d8a
+2026-09-28T10:33:05.1964662Z ##[endgroup]
+2026-09-28T10:33:05.2105755Z ##[group]Inspecting default docker context
+2026-09-28T10:33:05.2232526Z [
+2026-09-28T10:33:05.2233458Z   {
+2026-09-28T10:33:05.2233895Z     "Name": "default",
+2026-09-28T10:33:05.2234481Z     "Metadata": {},
+2026-09-28T10:33:05.2235026Z     "Endpoints": {
+2026-09-28T10:33:05.2235561Z       "docker": {
+2026-09-28T10:33:05.2236126Z         "Host": "unix:///var/run/docker.sock",
+2026-09-28T10:33:05.2236850Z         "SkipTLSVerify": false
+2026-09-28T10:33:05.2237392Z       }
+2026-09-28T10:33:05.2237830Z     },
+2026-09-28T10:33:05.2238245Z     "TLSMaterial": {},
+2026-09-28T10:33:05.2238796Z     "Storage": {
+2026-09-28T10:33:05.2239332Z       "MetadataPath": "<IN MEMORY>",
+2026-09-28T10:33:05.2239955Z       "TLSPath": "<IN MEMORY>"
+2026-09-28T10:33:05.2240754Z     }
+2026-09-28T10:33:05.2241159Z   }
+2026-09-28T10:33:05.2241560Z ]
+2026-09-28T10:33:05.2242548Z ##[endgroup]
+2026-09-28T10:33:05.2243438Z ##[group]Creating a new builder instance
+2026-09-28T10:33:05.3206081Z [command]/usr/bin/docker buildx create --name builder-ee3f7d05-79b7-4910-8f08-9843ba059d96 --driver docker-container --buildkitd-flags --allow-insecure-entitlement security.insecure --allow-insecure-entitlement network.host --use
+2026-09-28T10:33:05.4252816Z builder-ee3f7d05-79b7-4910-8f08-9843ba059d96
+2026-09-28T10:33:05.4297954Z ##[endgroup]
+2026-09-28T10:33:05.4299727Z ##[group]Booting builder
+2026-09-28T10:33:05.4331775Z [command]/usr/bin/docker buildx inspect --bootstrap --builder builder-ee3f7d05-79b7-4910-8f08-9843ba059d96
+2026-09-28T10:33:05.4811078Z #1 [internal] booting buildkit
+2026-09-28T10:33:05.6318380Z #1 pulling image moby/buildkit:buildx-stable-1
+2026-09-28T10:33:10.5162175Z #1 pulling image moby/buildkit:buildx-stable-1 5.0s done
+2026-09-28T10:33:10.6672554Z #1 creating container buildx_buildkit_builder-ee3f7d05-79b7-4910-8f08-9843ba059d960
+2026-09-28T10:33:10.8138895Z #1 creating container buildx_buildkit_builder-ee3f7d05-79b7-4910-8f08-9843ba059d960 0.3s done
+2026-09-28T10:33:10.8475839Z #1 DONE 5.3s
+2026-09-28T10:33:10.8807684Z Name:          builder-ee3f7d05-79b7-4910-8f08-9843ba059d96
+2026-09-28T10:33:10.8823150Z Driver:        docker-container
+2026-09-28T10:33:10.8824444Z Last Activity: 2026-09-28 10:33:05 +0000 UTC
+2026-09-28T10:33:10.8824709Z 
+2026-09-28T10:33:10.8824799Z Nodes:
+2026-09-28T10:33:10.8825140Z Name:                  builder-ee3f7d05-79b7-4910-8f08-9843ba059d960
+2026-09-28T10:33:10.8825655Z Endpoint:              unix:///var/run/docker.sock
+2026-09-28T10:33:10.8825975Z Status:                running
+2026-09-28T10:33:10.8826560Z BuildKit daemon flags: --allow-insecure-entitlement security.insecure --allow-insecure-entitlement network.host
+2026-09-28T10:33:10.8827163Z BuildKit version:      v0.32.2
+2026-09-28T10:33:10.8827515Z Platforms:             linux/arm64, linux/arm/v7, linux/arm/v6
+2026-09-28T10:33:10.8827977Z Labels:
+2026-09-28T10:33:10.8828269Z  org.mobyproject.buildkit.worker.executor:         oci
+2026-09-28T10:33:10.8828758Z  org.mobyproject.buildkit.worker.hostname:         c383a272e82f
+2026-09-28T10:33:10.8829219Z  org.mobyproject.buildkit.worker.network:          host
+2026-09-28T10:33:10.8829653Z  org.mobyproject.buildkit.worker.oci.process-mode: sandbox
+2026-09-28T10:33:10.8830140Z  org.mobyproject.buildkit.worker.selinux.enabled:  false
+2026-09-28T10:33:10.8830776Z  org.mobyproject.buildkit.worker.snapshotter:      overlayfs
+2026-09-28T10:33:10.8831178Z GC Policy rule#0:
+2026-09-28T10:33:10.8831418Z  All:            false
+2026-09-28T10:33:10.8831806Z  Filters:        type==source.local type==exec.cachemount type==source.git.checkout
+2026-09-28T10:33:10.8832269Z  Keep Duration:  48h0m0s
+2026-09-28T10:33:10.8832559Z  Max Used Space: 488.3MiB
+2026-09-28T10:33:10.8832859Z GC Policy rule#1:
+2026-09-28T10:33:10.8833115Z  All:            false
+2026-09-28T10:33:10.8833498Z  Keep Duration:  1440h0m0s
+2026-09-28T10:33:10.8835605Z  Reserved Space: 9.313GiB
+2026-09-28T10:33:10.8868727Z  Max Used Space: 93.13GiB
+2026-09-28T10:33:10.8871375Z  Min Free Space: 27.01GiB
+2026-09-28T10:33:10.8872199Z GC Policy rule#2:
+2026-09-28T10:33:10.8872970Z  All:            false
+2026-09-28T10:33:10.8873493Z  Reserved Space: 9.313GiB
+2026-09-28T10:33:10.8873958Z  Max Used Space: 93.13GiB
+2026-09-28T10:33:10.8874634Z  Min Free Space: 27.01GiB
+2026-09-28T10:33:10.8877542Z GC Policy rule#3:
+2026-09-28T10:33:10.8878044Z  All:            true
+2026-09-28T10:33:10.8881510Z  Reserved Space: 9.313GiB
+2026-09-28T10:33:10.8882114Z  Max Used Space: 93.13GiB
+2026-09-28T10:33:10.8882703Z  Min Free Space: 27.01GiB
+2026-09-28T10:33:10.8884342Z ##[endgroup]
+2026-09-28T10:33:10.9729531Z ##[group]Inspect builder
+2026-09-28T10:33:10.9730853Z {
+2026-09-28T10:33:10.9731422Z   "nodes": [
+2026-09-28T10:33:10.9731937Z     {
+2026-09-28T10:33:10.9732515Z       "name": "builder-ee3f7d05-79b7-4910-8f08-9843ba059d960",
+2026-09-28T10:33:10.9733136Z       "endpoint": "unix:///var/run/docker.sock",
+2026-09-28T10:33:10.9733760Z       "status": "running",
+2026-09-28T10:33:10.9734541Z       "buildkitd-flags": "--allow-insecure-entitlement security.insecure --allow-insecure-entitlement network.host",
+2026-09-28T10:33:10.9735269Z       "buildkit": "v0.32.2",
+2026-09-28T10:33:10.9735791Z       "platforms": "linux/arm64,linux/arm/v7,linux/arm/v6",
+2026-09-28T10:33:10.9736299Z       "features": {
+2026-09-28T10:33:10.9736826Z         "Automatically load images to the Docker Engine image store": true,
+2026-09-28T10:33:10.9737416Z         "Cache export": true,
+2026-09-28T10:33:10.9737832Z         "Direct push": true,
+2026-09-28T10:33:10.9738299Z         "Docker exporter": true,
+2026-09-28T10:33:10.9738714Z         "Multi-platform build": true,
+2026-09-28T10:33:10.9739621Z         "OCI exporter": true
+2026-09-28T10:33:10.9740025Z       },
+2026-09-28T10:33:10.9740870Z       "labels": {
+2026-09-28T10:33:10.9741577Z         "org.mobyproject.buildkit.worker.executor": "oci",
+2026-09-28T10:33:10.9742146Z         "org.mobyproject.buildkit.worker.hostname": "c383a272e82f",
+2026-09-28T10:33:10.9742732Z         "org.mobyproject.buildkit.worker.network": "host",
+2026-09-28T10:33:10.9743575Z         "org.mobyproject.buildkit.worker.oci.process-mode": "sandbox",
+2026-09-28T10:33:10.9744250Z         "org.mobyproject.buildkit.worker.selinux.enabled": "false",
+2026-09-28T10:33:10.9744875Z         "org.mobyproject.buildkit.worker.snapshotter": "overlayfs"
+2026-09-28T10:33:10.9745372Z       },
+2026-09-28T10:33:10.9745842Z       "gcPolicy": [
+2026-09-28T10:33:10.9746537Z         {
+2026-09-28T10:33:10.9746916Z           "all": false,
+2026-09-28T10:33:10.9747359Z           "filter": [
+2026-09-28T10:33:10.9747840Z             "type==source.local type==exec.cachemount type==source.git.checkout"
+2026-09-28T10:33:10.9748374Z           ],
+2026-09-28T10:33:10.9748839Z           "keepDuration": "48h0m0s",
+2026-09-28T10:33:10.9749254Z           "maxUsedSpace": "488.3MiB"
+2026-09-28T10:33:10.9749951Z         },
+2026-09-28T10:33:10.9750967Z         {
+2026-09-28T10:33:10.9751356Z           "all": false,
+2026-09-28T10:33:10.9751889Z           "keepDuration": "1440h0m0s",
+2026-09-28T10:33:10.9752328Z           "reservedSpace": "9.313GiB",
+2026-09-28T10:33:10.9752838Z           "maxUsedSpace": "93.13GiB",
+2026-09-28T10:33:10.9753260Z           "minFreeSpace": "27.01GiB"
+2026-09-28T10:33:10.9753655Z         },
+2026-09-28T10:33:10.9754075Z         {
+2026-09-28T10:33:10.9754451Z           "all": false,
+2026-09-28T10:33:10.9754885Z           "reservedSpace": "9.313GiB",
+2026-09-28T10:33:10.9755308Z           "maxUsedSpace": "93.13GiB",
+2026-09-28T10:33:10.9755715Z           "minFreeSpace": "27.01GiB"
+2026-09-28T10:33:10.9756240Z         },
+2026-09-28T10:33:10.9756573Z         {
+2026-09-28T10:33:10.9756969Z           "all": true,
+2026-09-28T10:33:10.9757345Z           "reservedSpace": "9.313GiB",
+2026-09-28T10:33:10.9757760Z           "maxUsedSpace": "93.13GiB",
+2026-09-28T10:33:10.9758261Z           "minFreeSpace": "27.01GiB"
+2026-09-28T10:33:10.9758672Z         }
+2026-09-28T10:33:10.9759070Z       ]
+2026-09-28T10:33:10.9759402Z     }
+2026-09-28T10:33:10.9759750Z   ],
+2026-09-28T10:33:10.9760204Z   "name": "builder-ee3f7d05-79b7-4910-8f08-9843ba059d96",
+2026-09-28T10:33:10.9760954Z   "driver": "docker-container",
+2026-09-28T10:33:10.9761421Z   "lastActivity": "2026-09-28T10:33:05.000Z"
+2026-09-28T10:33:10.9761834Z }
+2026-09-28T10:33:10.9762835Z ##[endgroup]
+2026-09-28T10:33:10.9763448Z ##[group]BuildKit version
+2026-09-28T10:33:10.9763950Z builder-ee3f7d05-79b7-4910-8f08-9843ba059d960: v0.32.2
+2026-09-28T10:33:10.9764605Z ##[endgroup]
+2026-09-28T10:33:10.9904620Z ##[group]Run docker/login-action@v3
+2026-09-28T10:33:10.9905090Z with:
+2026-09-28T10:33:10.9905300Z   logout: true
+2026-09-28T10:33:10.9905526Z env:
+2026-09-28T10:33:10.9905808Z   CARGO_TERM_COLOR: always
+2026-09-28T10:33:10.9906074Z   IMAGE: LIUBANGJIAN/download-gateway
+2026-09-28T10:33:10.9906434Z ##[endgroup]
+2026-09-28T10:33:11.2529763Z (node:2670) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-28T10:33:11.2530694Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-28T10:33:11.2555309Z ##[error]Username and password required
+2026-09-28T10:33:11.2780884Z Post job cleanup.
+2026-09-28T10:33:11.5432921Z ##[group]Logout from docker.io
+2026-09-28T10:33:11.5452290Z (node:2678) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-28T10:33:11.5453125Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-28T10:33:11.5475918Z [command]/usr/bin/docker logout docker.io
+2026-09-28T10:33:11.5591203Z Removing login credentials for docker.io
+2026-09-28T10:33:11.5646186Z ##[endgroup]
+2026-09-28T10:33:11.5661900Z ##[group]Post cache
+2026-09-28T10:33:11.5662504Z State not set
+2026-09-28T10:33:11.5663173Z ##[endgroup]
+2026-09-28T10:33:11.5826035Z Post job cleanup.
+2026-09-28T10:33:11.7957555Z ##[group]Removing builder
+2026-09-28T10:33:11.7962840Z (node:2699) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-28T10:33:11.7963785Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-28T10:33:11.8866266Z [command]/usr/bin/docker buildx rm builder-ee3f7d05-79b7-4910-8f08-9843ba059d96
+2026-09-28T10:33:12.0229858Z builder-ee3f7d05-79b7-4910-8f08-9843ba059d96 removed
+2026-09-28T10:33:12.0254407Z ##[endgroup]
+2026-09-28T10:33:12.0254877Z ##[group]Cleaning up certificates
+2026-09-28T10:33:12.0256169Z ##[endgroup]
+2026-09-28T10:33:12.0256752Z ##[group]Post cache
+2026-09-28T10:33:12.0258760Z State not set
+2026-09-28T10:33:12.0259215Z ##[endgroup]
+2026-09-28T10:33:12.0427512Z Post job cleanup.
+2026-09-28T10:33:12.1148397Z [command]/usr/bin/git version
+2026-09-28T10:33:12.1185348Z git version 2.55.0
+2026-09-28T10:33:12.1219054Z Temporarily overriding HOME='/home/runner/work/_temp/a98fbe06-56da-43c5-875a-b3619c7f195a' before making global git config changes
+2026-09-28T10:33:12.1220567Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-28T10:33:12.1224053Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/download-gateway/download-gateway
+2026-09-28T10:33:12.1266570Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-28T10:33:12.1297367Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-28T10:33:12.1506930Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-28T10:33:12.1528092Z http.https://github.com/.extraheader
+2026-09-28T10:33:12.1541910Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-09-28T10:33:12.1611313Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-28T10:33:12.1822275Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-28T10:33:12.1856287Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-28T10:33:12.2197002Z Cleaning up orphan processes
+2026-09-28T10:33:12.2573965Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, docker/login-action@v3, docker/setup-buildx-action@v3. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

@@ -1,0 +1,52 @@
+﻿2026-09-28T10:32:01.5114440Z ##[group]Run Swatinem/rust-cache@v2
+2026-09-28T10:32:01.5115673Z with:
+2026-09-28T10:32:01.5116518Z   prefix-key: v0-rust
+2026-09-28T10:32:01.5117530Z   add-job-id-key: true
+2026-09-28T10:32:01.5118602Z   add-rust-environment-hash-key: true
+2026-09-28T10:32:01.5119731Z   cache-targets: true
+2026-09-28T10:32:01.5120716Z   cache-all-crates: false
+2026-09-28T10:32:01.5122023Z   cache-workspace-crates: false
+2026-09-28T10:32:01.5123084Z   save-if: true
+2026-09-28T10:32:01.5123999Z   cache-provider: github
+2026-09-28T10:32:01.5125021Z   cache-bin: true
+2026-09-28T10:32:01.5125898Z   lookup-only: false
+2026-09-28T10:32:01.5126976Z   cmd-format: {0}
+2026-09-28T10:32:01.5127828Z env:
+2026-09-28T10:32:01.5128668Z   CARGO_TERM_COLOR: always
+2026-09-28T10:32:01.5129718Z   IMAGE: LIUBANGJIAN/download-gateway
+2026-09-28T10:32:01.5130829Z   CARGO_HOME: /home/runner/.cargo
+2026-09-28T10:32:01.5132080Z   CARGO_INCREMENTAL: 0
+2026-09-28T10:32:01.5132969Z ##[endgroup]
+2026-09-28T10:32:01.8628389Z ##[group]Cache Configuration
+2026-09-28T10:32:01.8630408Z Cache Provider:
+2026-09-28T10:32:01.8633447Z     github
+2026-09-28T10:32:01.8634432Z Workspaces:
+2026-09-28T10:32:01.8635645Z     /home/runner/work/download-gateway/download-gateway
+2026-09-28T10:32:01.8637056Z Cache Paths:
+2026-09-28T10:32:01.8638193Z     /home/runner/.cargo/bin
+2026-09-28T10:32:01.8639415Z     /home/runner/.cargo/.crates.toml
+2026-09-28T10:32:01.8640724Z     /home/runner/.cargo/.crates2.json
+2026-09-28T10:32:01.8642063Z     /home/runner/.cargo/registry
+2026-09-28T10:32:01.8643395Z     /home/runner/.cargo/git
+2026-09-28T10:32:01.8644614Z     /home/runner/work/download-gateway/download-gateway/target
+2026-09-28T10:32:01.8645956Z Restore Key:
+2026-09-28T10:32:01.8646855Z     v0-rust-test-Linux-x64-6ff13d87
+2026-09-28T10:32:01.8647877Z Cache Key:
+2026-09-28T10:32:01.8648772Z     v0-rust-test-Linux-x64-6ff13d87-12be1066
+2026-09-28T10:32:01.8649857Z .. Prefix:
+2026-09-28T10:32:01.8650752Z   - v0-rust-test-Linux-x64
+2026-09-28T10:32:01.8652547Z .. Environment considered:
+2026-09-28T10:32:01.8654138Z   - Rust Versions:
+2026-09-28T10:32:01.8656194Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-28T10:32:01.8657859Z   - CARGO_HOME
+2026-09-28T10:32:01.8658903Z   - CARGO_INCREMENTAL
+2026-09-28T10:32:01.8660073Z   - CARGO_TERM_COLOR
+2026-09-28T10:32:01.8661168Z .. Lockfiles considered:
+2026-09-28T10:32:01.8662826Z   - /home/runner/work/download-gateway/download-gateway/Cargo.lock
+2026-09-28T10:32:01.8665100Z   - /home/runner/work/download-gateway/download-gateway/Cargo.toml
+2026-09-28T10:32:01.8668092Z   - /home/runner/work/download-gateway/download-gateway/crates/bitcomet-api/Cargo.toml
+2026-09-28T10:32:01.8670288Z   - /home/runner/work/download-gateway/download-gateway/crates/dispatch-core/Cargo.toml
+2026-09-28T10:32:01.8673112Z ##[endgroup]
+2026-09-28T10:32:01.8673797Z 
+2026-09-28T10:32:01.8674325Z ... Restoring cache ...
+2026-09-28T10:32:02.0106807Z No cache found.

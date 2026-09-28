@@ -1,0 +1,10 @@
+﻿2026-09-28T10:33:10.9904602Z ##[group]Run docker/login-action@v3
+2026-09-28T10:33:10.9905086Z with:
+2026-09-28T10:33:10.9905298Z   logout: true
+2026-09-28T10:33:10.9905524Z env:
+2026-09-28T10:33:10.9905805Z   CARGO_TERM_COLOR: always
+2026-09-28T10:33:10.9906071Z   IMAGE: LIUBANGJIAN/download-gateway
+2026-09-28T10:33:10.9906432Z ##[endgroup]
+2026-09-28T10:33:11.2529716Z (node:2670) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-28T10:33:11.2530690Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-28T10:33:11.2555270Z ##[error]Username and password required

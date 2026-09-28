@@ -1,0 +1,10 @@
+﻿2026-09-28T10:33:09.5934472Z Post job cleanup.
+2026-09-28T10:33:09.9070613Z ##[group]Logout from docker.io
+2026-09-28T10:33:09.9094064Z (node:2724) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-28T10:33:09.9095648Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-28T10:33:09.9118703Z [command]/usr/bin/docker logout docker.io
+2026-09-28T10:33:09.9304162Z Removing login credentials for docker.io
+2026-09-28T10:33:09.9346983Z ##[endgroup]
+2026-09-28T10:33:09.9348017Z ##[group]Post cache
+2026-09-28T10:33:09.9349449Z State not set
+2026-09-28T10:33:09.9350680Z ##[endgroup]

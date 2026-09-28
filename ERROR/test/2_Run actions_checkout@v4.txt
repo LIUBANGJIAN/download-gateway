@@ -1,0 +1,76 @@
+﻿2026-09-28T10:31:59.9747394Z ##[group]Run actions/checkout@v4
+2026-09-28T10:31:59.9748269Z with:
+2026-09-28T10:31:59.9748901Z   repository: LIUBANGJIAN/download-gateway
+2026-09-28T10:31:59.9753688Z   token: ***
+2026-09-28T10:31:59.9754261Z   ssh-strict: true
+2026-09-28T10:31:59.9754848Z   ssh-user: git
+2026-09-28T10:31:59.9755399Z   persist-credentials: true
+2026-09-28T10:31:59.9755989Z   clean: true
+2026-09-28T10:31:59.9756537Z   sparse-checkout-cone-mode: true
+2026-09-28T10:31:59.9757201Z   fetch-depth: 1
+2026-09-28T10:31:59.9757753Z   fetch-tags: false
+2026-09-28T10:31:59.9758678Z   show-progress: true
+2026-09-28T10:31:59.9759231Z   lfs: false
+2026-09-28T10:31:59.9759768Z   submodules: false
+2026-09-28T10:31:59.9760341Z   set-safe-directory: true
+2026-09-28T10:31:59.9760956Z   allow-unsafe-pr-checkout: false
+2026-09-28T10:31:59.9761936Z env:
+2026-09-28T10:31:59.9762453Z   CARGO_TERM_COLOR: always
+2026-09-28T10:31:59.9763100Z   IMAGE: LIUBANGJIAN/download-gateway
+2026-09-28T10:31:59.9763792Z ##[endgroup]
+2026-09-28T10:32:00.0768223Z Syncing repository: LIUBANGJIAN/download-gateway
+2026-09-28T10:32:00.0770531Z ##[group]Getting Git version info
+2026-09-28T10:32:00.0771728Z Working directory is '/home/runner/work/download-gateway/download-gateway'
+2026-09-28T10:32:00.0773202Z [command]/usr/bin/git version
+2026-09-28T10:32:00.0843502Z git version 2.55.0
+2026-09-28T10:32:00.0871608Z ##[endgroup]
+2026-09-28T10:32:00.0879941Z Temporarily overriding HOME='/home/runner/work/_temp/2a0427d9-5442-405b-9ab1-49588aa74a88' before making global git config changes
+2026-09-28T10:32:00.0883140Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-28T10:32:00.0885522Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/download-gateway/download-gateway
+2026-09-28T10:32:00.0932499Z Deleting the contents of '/home/runner/work/download-gateway/download-gateway'
+2026-09-28T10:32:00.0938654Z ##[group]Initializing the repository
+2026-09-28T10:32:00.0943122Z [command]/usr/bin/git init /home/runner/work/download-gateway/download-gateway
+2026-09-28T10:32:00.1040527Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-28T10:32:00.1042255Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-28T10:32:00.1043352Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-28T10:32:00.1044268Z hint: call:
+2026-09-28T10:32:00.1044782Z hint:
+2026-09-28T10:32:00.1045417Z hint: 	git config --global init.defaultBranch <name>
+2026-09-28T10:32:00.1046151Z hint:
+2026-09-28T10:32:00.1046827Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-28T10:32:00.1047853Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-28T10:32:00.1048772Z hint:
+2026-09-28T10:32:00.1049311Z hint: 	git branch -m <name>
+2026-09-28T10:32:00.1049903Z hint:
+2026-09-28T10:32:00.1050684Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-28T10:32:00.1055462Z Initialized empty Git repository in /home/runner/work/download-gateway/download-gateway/.git/
+2026-09-28T10:32:00.1065228Z [command]/usr/bin/git remote add origin https://github.com/LIUBANGJIAN/download-gateway
+2026-09-28T10:32:00.1113680Z ##[endgroup]
+2026-09-28T10:32:00.1115140Z ##[group]Disabling automatic garbage collection
+2026-09-28T10:32:00.1116845Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-28T10:32:00.1144173Z ##[endgroup]
+2026-09-28T10:32:00.1145515Z ##[group]Setting up auth
+2026-09-28T10:32:00.1149848Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-28T10:32:00.1176500Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-28T10:32:00.1497014Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-28T10:32:00.1534714Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-28T10:32:00.1722446Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-28T10:32:00.1750433Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-28T10:32:00.1926002Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-28T10:32:00.1958096Z ##[endgroup]
+2026-09-28T10:32:00.1959437Z ##[group]Fetching the repository
+2026-09-28T10:32:00.1967789Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +bcadf90c9154ae66b893cd082da3b236e8d7b8a5:refs/remotes/origin/main
+2026-09-28T10:32:00.6374994Z From https://github.com/LIUBANGJIAN/download-gateway
+2026-09-28T10:32:00.6378186Z  * [new ref]         bcadf90c9154ae66b893cd082da3b236e8d7b8a5 -> origin/main
+2026-09-28T10:32:00.6383640Z ##[endgroup]
+2026-09-28T10:32:00.6385604Z ##[group]Determining the checkout info
+2026-09-28T10:32:00.6388234Z ##[endgroup]
+2026-09-28T10:32:00.6389612Z [command]/usr/bin/git sparse-checkout disable
+2026-09-28T10:32:00.6439113Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-28T10:32:00.6499702Z ##[group]Checking out the ref
+2026-09-28T10:32:00.6502440Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-09-28T10:32:00.6570474Z Switched to a new branch 'main'
+2026-09-28T10:32:00.6575418Z branch 'main' set up to track 'origin/main'.
+2026-09-28T10:32:00.6580531Z ##[endgroup]
+2026-09-28T10:32:00.6614804Z [command]/usr/bin/git log -1 --format=%H
+2026-09-28T10:32:00.6635187Z bcadf90c9154ae66b893cd082da3b236e8d7b8a5

@@ -1,0 +1,15 @@
+﻿2026-09-28T10:32:49.3112044Z ##[group]Run if grep -qE '^name = "native-tls"$' Cargo.lock; then
+2026-09-28T10:32:49.3112557Z [36;1mif grep -qE '^name = "native-tls"$' Cargo.lock; then[0m
+2026-09-28T10:32:49.3113005Z [36;1m  echo "::error::Cargo.lock 含 native-tls —— Docker/Linux 下 TLS 将不可用"[0m
+2026-09-28T10:32:49.3113367Z [36;1m  exit 1[0m
+2026-09-28T10:32:49.3113574Z [36;1mfi[0m
+2026-09-28T10:32:49.3113873Z [36;1mecho "TLS 后端检查通过（未引入 native-tls）"[0m
+2026-09-28T10:32:49.3152457Z shell: /usr/bin/bash -e {0}
+2026-09-28T10:32:49.3152746Z env:
+2026-09-28T10:32:49.3152971Z   CARGO_TERM_COLOR: always
+2026-09-28T10:32:49.3153265Z   IMAGE: LIUBANGJIAN/download-gateway
+2026-09-28T10:32:49.3153553Z   CARGO_HOME: /home/runner/.cargo
+2026-09-28T10:32:49.3153810Z   CARGO_INCREMENTAL: 0
+2026-09-28T10:32:49.3154044Z   CACHE_ON_FAILURE: false
+2026-09-28T10:32:49.3154295Z ##[endgroup]
+2026-09-28T10:32:49.3226372Z TLS 后端检查通过（未引入 native-tls）

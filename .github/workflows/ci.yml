@@ -8,8 +8,15 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # 镜像名与仓库名一致；可用仓库变量 DOCKERHUB_USERNAME 覆盖
-  IMAGE: ${{ vars.DOCKERHUB_USERNAME || github.repository_owner }}/download-gateway
+  # ⚠️ 镜像名**刻意不在这里定义**。
+  # 它必须优先取 `secrets.DOCKERHUB_USERNAME`：Docker Hub 命名空间是**全小写**的，
+  # 且与 GitHub 用户名**不保证一致**；而 workflow 级 `env:` 取不到 `secrets` 上下文。
+  # 统一由 `gate` job 解析并规范化后，用 job output 传给 build / merge。
+  #
+  # 这是 run #2 实测踩出来的（缺陷 D-11）：原来写的是
+  # `vars.DOCKERHUB_USERNAME || github.repository_owner`，只配了 secret 没配 variable 时
+  # 回退成 `LIUBANGJIAN`，buildx 直接报
+  #   failed to push LIUBANGJIAN/download-gateway: ... lookup LIUBANGJIAN ...: no such host
 
 jobs:
   # ---------- 0) 隐私脱敏闸门（public 仓库：命中即中止）----------
@@ -124,16 +131,33 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       publish: ${{ steps.check.outputs.publish }}
+      image: ${{ steps.check.outputs.image }}
     steps:
       - id: check
         env:
-          U: ${{ secrets.DOCKERHUB_USERNAME }}
-          T: ${{ secrets.DOCKERHUB_TOKEN }}
+          SECRET_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          SECRET_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          VAR_USER: ${{ vars.DOCKERHUB_USERNAME }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           set -uo pipefail
-          if [ -n "${U}" ] && [ -n "${T}" ]; then
+
+          # ---- 一、解析镜像名（必须全小写，且以 secrets 里的 Docker Hub 用户名为准）----
+          u="${SECRET_USER:-}"
+          [ -n "$u" ] || u="${VAR_USER:-}"
+          [ -n "$u" ] || u="${OWNER:-}"
+          u="$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')"
+          if [ -z "$u" ] || printf '%s' "$u" | grep -q '[^a-z0-9._-]'; then
+            echo "::error::无法解析出合法的 Docker Hub 命名空间：「$u」（只允许小写字母 / 数字 / . _ -）"
+            exit 1
+          fi
+          echo "image=${u}/download-gateway" >> "$GITHUB_OUTPUT"
+          echo "镜像名 = ${u}/download-gateway"
+
+          # ---- 二、判定是否具备发布条件 ----
+          if [ -n "${SECRET_USER:-}" ] && [ -n "${SECRET_TOKEN:-}" ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
-            echo "Docker Hub 凭据已配置：将构建并发布多架构镜像"
+            echo "Docker Hub 凭据已配置：将构建并推送多架构镜像"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=跳过镜像发布::Docker Hub 凭据未配置。请到 Settings → Secrets and variables → Actions 添加 DOCKERHUB_USERNAME 与 DOCKERHUB_TOKEN。本次仍会构建镜像以验证 Dockerfile。"
@@ -174,7 +198,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE }}
+          images: ${{ needs.gate.outputs.image }}
 
       - name: 构建镜像${{ needs.gate.outputs.publish == 'true' && '并推送' || '（仅验证，不推送）' }}
         id: build
@@ -182,10 +206,10 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          # 无凭据时：push=false 且不设 outputs ⇒ 结果只留在 buildx 缓存里，
-          # 但**确实完整编译了一遍**，Dockerfile 的每一层都被验证过。
-          push: ${{ needs.gate.outputs.publish == 'true' }}
-          outputs: ${{ needs.gate.outputs.publish == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || '' }}
+          # 推送由 outputs 里的 `push=true` 控制 —— push-by-digest 必须用 `outputs` 形式，
+          # 不能用 `push:` 快捷写法（那会退化成普通 tag 推送，拿不到逐架构 digest）。
+          # 无凭据时 outputs 为空 ⇒ 只构建进 buildx 缓存（**Dockerfile 每一层仍被完整验证**）。
+          outputs: ${{ needs.gate.outputs.publish == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', needs.gate.outputs.image) || '' }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -224,7 +248,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE }}
+          images: ${{ needs.gate.outputs.image }}
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
@@ -236,11 +260,11 @@ jobs:
         run: |
           docker buildx imagetools create \
             $(jq -cr '.tags|map("-t "+.)|join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf "${{ env.IMAGE }}@sha256:%s " *)
+            $(printf "${{ needs.gate.outputs.image }}@sha256:%s " *)
       - name: Verify manifest
         run: |
-          docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect ${{ needs.gate.outputs.image }}:${{ steps.meta.outputs.version }}
           echo "### 多架构 manifest 已发布" >> "$GITHUB_STEP_SUMMARY"
-          docker buildx imagetools inspect --raw ${{ env.IMAGE }}:${{ steps.meta.outputs.version }} \
+          docker buildx imagetools inspect --raw ${{ needs.gate.outputs.image }}:${{ steps.meta.outputs.version }} \
             | jq -r '.manifests[] | "| \(.platform.architecture) | \(.platform.os) | \(.digest) |"' \
             | { echo "| arch | os | digest |"; echo "|---|---|---|"; cat; } >> "$GITHUB_STEP_SUMMARY"
