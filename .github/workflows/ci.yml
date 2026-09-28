@@ -30,9 +30,8 @@ jobs:
           # 刻意**不放**「明文提及敏感文件名」（如 `xxx.token.txt`）这类启发式：
           # ① 文件名不是凭据，价值极低；
           # ② 它是**自指**的 —— 任何解释这条规则的注释、任何列出待忽略文件的
-          #    `.gitignore` 都会命中它，导致闸门永远红灯（本地实测确实如此）。
-          #    这种「为了通过而反复改注释」的脆弱闸门比没有闸门更糟：
-          #    它会训练出「闸门红了就改注释」的坏习惯。
+          #    `.gitignore` 都会命中它，导致闸门永远红灯（本地实测确实如此，
+          #    见 commit 说明里的 D-8）。
           # 文件级策略交给 `.gitignore`（第一道防线）。
           PAT='ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|dckr_pat_[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|192\.168\.[0-9]+\.[0-9]+|10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|(admin|root|user|guest):[A-Za-z0-9@._!-]{1,16}'
           if git grep -nIE "$PAT" -- . ; then
@@ -71,6 +70,29 @@ jobs:
           fi
           echo "TLS 后端检查通过（未引入 native-tls）"
 
+      # 这条闸门替代了原来的「明文提及敏感文件名」启发式：
+      # 它检查的是**真实风险**（凭据/设计文档被 `git add -f` 强推），而不是字面串。
+      - name: 闸门 · 敏感文件不得进入版本控制
+        run: |
+          set -uo pipefail
+          bad=0
+          # ⚠️ 必须用 `git ls-files -z`：不带 `-z` 时，git 会给含**非 ASCII** 的路径
+          # 加引号并做八进制转义（实测输出形如 `"design/__\351\227\270..."`），
+          # 于是任何 `^design/` 这类锚定匹配都会失效 —— 而本项目要防的文件名
+          # 恰好几乎全是中文。这就是「闸门看着在、实际是装饰」的典型静默失效：
+          # 本地用纯 ASCII 文件名测会过，换成真实中文名就漏。
+          # 另：用 `< <(...)` 而不是管道，否则 while 跑在子 shell 里，`bad=1` 传不回来。
+          while IFS= read -r -d '' f; do
+            case "$f" in
+              design/*|*/design/*|*.token.txt|doc/*服务器*.txt|doc/BitComet*.txt|.env|*/.env)
+                echo "::error file=$f::敏感文件被纳入版本控制（设计文档 / 凭据 / 环境文件）"
+                bad=1
+                ;;
+            esac
+          done < <(git ls-files -z)
+          if [ "$bad" -ne 0 ]; then exit 1; fi
+          echo "版本控制内容检查通过：无设计文档 / 凭据文件 / 环境文件"
+
       - uses: actions/setup-node@v4
         if: hashFiles('web/package.json') != ''
         with:
@@ -86,12 +108,43 @@ jobs:
           npm ci
           npm run build
 
-  # ---------- 2) 原生矩阵构建（amd64/arm64 各自原生，避 QEMU）----------
+  # ---------- 2) 发布条件判定 ----------
+  #
+  # 为什么要有这个 job：Docker Hub 凭据是**运行期配置**，不是代码。
+  # 没有它的时候，「构建并推送」这条路必然失败 —— 但那**不是代码问题**。
+  # 把两者解耦后：
+  #   · 有凭据 → 构建 + push-by-digest + 合并多架构 manifest；
+  #   · 无凭据 → **仍然构建镜像**（验证 Dockerfile 有效），只是不登录、不推送。
+  # 这样「Dockerfile 是否可用」每次推送都能被验证，而红叉只用来表示真问题。
+  #
+  # 注意：secrets 不能直接用在 job 级 `if:` 里，故必须用这种「小 job 导出 output」的写法。
+  gate:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+      - id: check
+        env:
+          U: ${{ secrets.DOCKERHUB_USERNAME }}
+          T: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -n "${U}" ] && [ -n "${T}" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Docker Hub 凭据已配置：将构建并发布多架构镜像"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=跳过镜像发布::Docker Hub 凭据未配置。请到 Settings → Secrets and variables → Actions 添加 DOCKERHUB_USERNAME 与 DOCKERHUB_TOKEN。本次仍会构建镜像以验证 Dockerfile。"
+          fi
+
+  # ---------- 3) 原生矩阵构建（amd64/arm64 各自原生，避 QEMU）----------
   #
   # 不用 QEMU 的原因（02 §5.2）：Rust 全量编译在仿真下要 40–90 分钟，
   # 而 ubuntu-24.04-arm 是原生 arm64 Runner，每格 5–8 分钟。
   build:
-    needs: test
+    needs: [test, gate]
     if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
@@ -110,39 +163,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+
+      - name: 登录 Docker Hub（仅发布时需要）
+        if: needs.gate.outputs.publish == 'true'
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
-      - id: build
+
+      - name: 构建镜像${{ needs.gate.outputs.publish == 'true' && '并推送' || '（仅验证，不推送）' }}
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # 无凭据时：push=false 且不设 outputs ⇒ 结果只留在 buildx 缓存里，
+          # 但**确实完整编译了一遍**，Dockerfile 的每一层都被验证过。
+          push: ${{ needs.gate.outputs.publish == 'true' }}
+          outputs: ${{ needs.gate.outputs.publish == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || '' }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
-      - name: Collect digest
+
+      - name: 收集 digest
+        if: needs.gate.outputs.publish == 'true'
         run: |
           mkdir -p /tmp/digests
           touch "/tmp/digests/${DIGEST#sha256:}"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+
       - uses: actions/upload-artifact@v4
+        if: needs.gate.outputs.publish == 'true'
         with:
           name: digests-${{ matrix.arch }}
           path: /tmp/digests/*
           retention-days: 1
 
-  # ---------- 3) 合并为多架构 manifest ----------
+  # ---------- 4) 合并为多架构 manifest ----------
   merge:
-    needs: build
-    if: github.event_name != 'pull_request'
+    needs: [build, gate]
+    if: github.event_name != 'pull_request' && needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -172,4 +238,9 @@ jobs:
             $(jq -cr '.tags|map("-t "+.)|join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "${{ env.IMAGE }}@sha256:%s " *)
       - name: Verify manifest
-        run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+        run: |
+          docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+          echo "### 多架构 manifest 已发布" >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools inspect --raw ${{ env.IMAGE }}:${{ steps.meta.outputs.version }} \
+            | jq -r '.manifests[] | "| \(.platform.architecture) | \(.platform.os) | \(.digest) |"' \
+            | { echo "| arch | os | digest |"; echo "|---|---|---|"; cat; } >> "$GITHUB_STEP_SUMMARY"
