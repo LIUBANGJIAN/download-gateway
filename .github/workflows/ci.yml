@@ -157,7 +157,6 @@ jobs:
           SECRET_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           SECRET_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           VAR_USER: ${{ vars.DOCKERHUB_USERNAME }}
-          OWNER: ${{ github.repository_owner }}
         run: |
           set -uo pipefail
 
@@ -185,19 +184,26 @@ jobs:
           # 小写字母 / 数字 / `.` `_` `-`，合法值天然满足。真有人写成大写，
           # 这里 fail fast 并直接告诉他改哪里，胜过推迟到 push 阶段才炸。
           #
-          # 只在真的会推送时校验：无凭据时 IMAGE 会回退到 `github.repository_owner`
-          # （GitHub 用户名可能含大写），那种情况根本不 push，没必要因此给个红叉。
+          # 兜底值与 build / merge 的表达式**逐字一致**：`namespace-unset`。
+          # 用占位值而不是 `github.repository_owner`，是为了让「解析出的命名空间」
+          # 在**任何**路径上都是合法小写串 —— 于是下面的字符集校验可以**无条件执行**，
+          # 不必再给「无凭据」开免检口子（那个口子正是 D-11 溜过去的地方：
+          # 非空但非法的 `LIUBANGJIAN/...` 因为没有校验而被放过）。
           u="${SECRET_USER:-}"
           [ -n "$u" ] || u="${VAR_USER:-}"
-          [ -n "$u" ] || u="${OWNER:-}"
+          [ -n "$u" ] || u='namespace-unset'
           echo "镜像命名空间解析结果 = 「${u}」"
 
+          # 字符集校验**无条件执行**：命名空间合法是本项目对镜像名的硬要求，
+          # 与「本次是否推送」无关。只允许小写字母 / 数字 / `.` `_` `-`
+          # （Docker Hub 命名空间本就如此；小写是硬性的，大写会被 buildx 当主机名）。
+          if [ -z "$u" ] || printf '%s' "$u" | grep -q '[^a-z0-9._-]'; then
+            echo "::error title=Docker Hub 命名空间非法::解析出的命名空间 = 「${u}」，只允许小写字母 / 数字 / . _ -。若这个值来自 GitHub 用户名，请改用 Docker Hub 用户名，并把 Settings → Secrets and variables → Actions 里的 DOCKERHUB_USERNAME 设成**全小写**后重跑。"
+            exit 1
+          fi
+          echo "镜像名 = ${u}/download-gateway（合法）"
           if [ "$publish" = "true" ]; then
-            if [ -z "$u" ] || printf '%s' "$u" | grep -q '[^a-z0-9._-]'; then
-              echo "::error title=Docker Hub 命名空间非法::secrets.DOCKERHUB_USERNAME = 「${u}」含非法字符（只允许小写字母 / 数字 / . _ -）。Docker Hub 命名空间强制全小写，请把该 secret 的值改成全小写后重跑。"
-              exit 1
-            fi
-            echo "镜像名 = ${u}/download-gateway（合法，将构建并推送）"
+            echo "具备发布条件：将构建并推送多架构镜像。"
           else
             echo "未具备发布条件：本次只构建镜像验证 Dockerfile，不推送。"
           fi
@@ -221,7 +227,13 @@ jobs:
     #    step output」这个未经验证的假设。env 是唯一有确定行为的通道。
     # 优先级链必须与 `gate` 里那段 shell **逐字一致**（见 gate 的注释）。
     env:
-      IMAGE: ${{ secrets.DOCKERHUB_USERNAME || vars.DOCKERHUB_USERNAME || github.repository_owner }}/download-gateway
+      # ⚠️ 兜底值**刻意不用** `github.repository_owner`：GitHub 用户名可能含**大写**，
+      # 而 buildx 会把首段含大写的名字当成 **registry 主机名**去 DNS 解析
+      # （现场报错：`lookup LIUBANGJIAN …: no such host`）—— 那就是缺陷 D-11。
+      # 改用中性占位 `namespace-unset`：它永远是一个**合法的小写命名空间**，
+      # 因此「无凭据」这条路径不会给构建带来红叉，也不可能被误当主机名；
+      # 而真正的发布路径由 gate 的 publish 把关，占位值永远推不出去。
+      IMAGE: ${{ secrets.DOCKERHUB_USERNAME || vars.DOCKERHUB_USERNAME || 'namespace-unset' }}/download-gateway
     strategy:
       fail-fast: false
       matrix:
@@ -257,6 +269,19 @@ jobs:
               exit 1
               ;;
           esac
+          # ⚠️ 必须校验**字符集**，不能只判空。历史现场：
+          #   IMAGE: LIUBANGJIAN/download-gateway      ← 非空，但非法（大写）
+          # 判空会放它过去，buildx 随后把它当 registry 主机名，
+          # 报出与真实原因毫不相干的 `lookup LIUBANGJIAN …: no such host`。
+          # 判据与 gate 那条**必须一致**，两侧不得各自演化。
+          ns="${IMAGE%/download-gateway}"
+          if printf '%s' "$ns" | grep -q '[^a-z0-9._-]'; then
+            echo "::error title=镜像命名空间非法::IMAGE=「${IMAGE}」的命名空间部分是「${ns}」，只允许小写字母 / 数字 / . _ -。Docker Hub 命名空间强制全小写；若你只依赖 GitHub 用户名兜底，请显式配置 DOCKERHUB_USERNAME。"
+            exit 1
+          fi
+          if [ "$ns" = "namespace-unset" ]; then
+            echo "::warning title=未配置 Docker Hub 用户名::镜像名使用了占位命名空间 namespace-unset，本次不会推送镜像（仅验证 Dockerfile）。"
+          fi
           echo "镜像名已解析：${IMAGE}（该值派生自 secret，GitHub 在日志里会打码成 *** —— 属于预期）"
           {
             echo "### 构建参数 · ${{ matrix.platform }}"
@@ -326,9 +351,9 @@ jobs:
     if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.gate.outputs.publish == 'true' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     # 同 build：镜像名走 job 级 env，不走 job output（缺陷 D-12）。
-    # 优先级链与 gate / build **逐字一致**。
+    # 优先级链与 gate / build **逐字一致**（含兜底值）。
     env:
-      IMAGE: ${{ secrets.DOCKERHUB_USERNAME || vars.DOCKERHUB_USERNAME || github.repository_owner }}/download-gateway
+      IMAGE: ${{ secrets.DOCKERHUB_USERNAME || vars.DOCKERHUB_USERNAME || 'namespace-unset' }}/download-gateway
     steps:
       - uses: actions/download-artifact@v4
         with:
