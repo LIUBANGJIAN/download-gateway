@@ -8,15 +8,27 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # ⚠️ 镜像名**刻意不在这里定义**。
-  # 它必须优先取 `secrets.DOCKERHUB_USERNAME`：Docker Hub 命名空间是**全小写**的，
-  # 且与 GitHub 用户名**不保证一致**；而 workflow 级 `env:` 取不到 `secrets` 上下文。
-  # 统一由 `gate` job 解析并规范化后，用 job output 传给 build / merge。
+  # ⚠️ 镜像名**刻意不在这里定义**，也**刻意不走 job output**。两个独立原因：
   #
-  # 这是 run #2 实测踩出来的（缺陷 D-11）：原来写的是
-  # `vars.DOCKERHUB_USERNAME || github.repository_owner`，只配了 secret 没配 variable 时
-  # 回退成 `LIUBANGJIAN`，buildx 直接报
-  #   failed to push LIUBANGJIAN/download-gateway: ... lookup LIUBANGJIAN ...: no such host
+  # 【一】workflow 级 `env:` 取不到 `secrets` 上下文 —— 只能取到 `vars` / `github`。
+  #   这是 run #2 实测踩出来的（缺陷 D-11）：原来写的是
+  #   `vars.DOCKERHUB_USERNAME || github.repository_owner`，只配了 secret 没配 variable 时
+  #   回退成 `LIUBANGJIAN`，buildx 直接报
+  #     failed to push LIUBANGJIAN/download-gateway: ... lookup LIUBANGJIAN ...: no such host
+  #
+  # 【二】更隐蔽的一条（缺陷 D-12，run #3）：**由 secret 派生出来的 job output 会被
+  #   GitHub 静默丢弃**。run #3 里 `gate` job 明明是 ✅，却在 run 页面留下一条 warning：
+  #     Skip output 'image' since it may contain secret.
+  #   于是 build 里 `format('type=image,name={0},…', needs.gate.outputs.image)` 拼出
+  #   `name=`（空），buildx 的 `build/opt.go` 判定 `name == "" && push != ""`，报
+  #     ERROR: failed to build: tag is needed when pushing to registry
+  #   —— 一个和「tag / push-by-digest」毫无关系的谜语人报错。
+  #   注意它是**按值内容**判定的：同一轮里 `publish`（字面量 "true"/"false"）能正常传递，
+  #   `image`（含 secret 的值）被吞。
+  #
+  # 所以现在的做法：**gate 只输出布尔 `publish`；镜像名由 build / merge 各自用
+  # job 级 `env:` 从 secret 现取**（同一个 job 内使用 secret 没有任何限制，
+  # 所有 `docker/login-action` 都这么用）。
 
 jobs:
   # ---------- 0) 隐私脱敏闸门（public 仓库：命中即中止）----------
@@ -127,11 +139,18 @@ jobs:
   # 注意：secrets 不能直接用在 job 级 `if:` 里，故必须用这种「小 job 导出 output」的写法。
   gate:
     needs: test
-    if: github.event_name != 'pull_request'
+    # ⚠️ 显式写 `needs.test.result` 而不是光写 `github.event_name != ...`：
+    # 一旦 job 级写了 `if:`，它就会**替换掉** GitHub 原本隐式的 `success()` 门禁，
+    # 于是「上游失败也照跑」。这类静默失守本项目踩过第二次（缺陷 D-13）。
+    if: ${{ !cancelled() && needs.test.result == 'success' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     outputs:
+      # ⚠️ 这里**只能**输出「不含 secret 派生」的值（缺陷 D-12）。
+      # 任何由 `secrets.*` 算出来的 job output 都会被 GitHub 静默丢弃，
+      # 只在 run 页面留一条 `Skip output '…' since it may contain secret.` 的 warning，
+      # 消费侧拿到的是空串 —— 错误于是以「下游某个谜语人报错」的形式延迟暴露。
+      # 镜像名因此**不再经过 output**，改由 build / merge 各自从 secret 现取。
       publish: ${{ steps.check.outputs.publish }}
-      image: ${{ steps.check.outputs.image }}
     steps:
       - id: check
         env:
@@ -142,25 +161,45 @@ jobs:
         run: |
           set -uo pipefail
 
-          # ---- 一、解析镜像名（必须全小写，且以 secrets 里的 Docker Hub 用户名为准）----
+          # ---- 一、判定是否具备发布条件 ----
+          # 这一步的产物只有布尔值，可以安全地作为 job output 传出去。
+          if [ -n "${SECRET_USER:-}" ] && [ -n "${SECRET_TOKEN:-}" ]; then
+            publish=true
+            echo "Docker Hub 凭据已配置：将构建并推送多架构镜像"
+          else
+            publish=false
+            echo "::notice title=跳过镜像发布::Docker Hub 凭据未配置。请到 Settings → Secrets and variables → Actions 添加 DOCKERHUB_USERNAME 与 DOCKERHUB_TOKEN。本次仍会构建镜像以验证 Dockerfile。"
+          fi
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+
+          # ---- 二、镜像名「校验」（注意：只校验，不做任何转换）----
+          #
+          # ⚠️ 这里**刻意不做 `tr '[:upper:]' '[:lower:]'`**。
+          # 原因：build / merge 里的镜像名是用**表达式**直接从 secret 取的
+          # （`secrets.DOCKERHUB_USERNAME || vars.DOCKERHUB_USERNAME || github.repository_owner`），
+          # 而表达式没有 `lower()` 可用。如果这里偷偷小写化，就会出现
+          # 「**校验过的值 ≠ 实际使用的值**」的静默漂移 —— 校验通过、推送照样炸。
+          # 所以优先级链与取值形态必须两侧**逐字一致**；能小写化就两侧都能，不能就两侧都不。
+          #
+          # 于是校验口径收敛为「要求原值本身就合法」：Docker Hub 命名空间本就只允许
+          # 小写字母 / 数字 / `.` `_` `-`，合法值天然满足。真有人写成大写，
+          # 这里 fail fast 并直接告诉他改哪里，胜过推迟到 push 阶段才炸。
+          #
+          # 只在真的会推送时校验：无凭据时 IMAGE 会回退到 `github.repository_owner`
+          # （GitHub 用户名可能含大写），那种情况根本不 push，没必要因此给个红叉。
           u="${SECRET_USER:-}"
           [ -n "$u" ] || u="${VAR_USER:-}"
           [ -n "$u" ] || u="${OWNER:-}"
-          u="$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')"
-          if [ -z "$u" ] || printf '%s' "$u" | grep -q '[^a-z0-9._-]'; then
-            echo "::error::无法解析出合法的 Docker Hub 命名空间：「$u」（只允许小写字母 / 数字 / . _ -）"
-            exit 1
-          fi
-          echo "image=${u}/download-gateway" >> "$GITHUB_OUTPUT"
-          echo "镜像名 = ${u}/download-gateway"
+          echo "镜像命名空间解析结果 = 「${u}」"
 
-          # ---- 二、判定是否具备发布条件 ----
-          if [ -n "${SECRET_USER:-}" ] && [ -n "${SECRET_TOKEN:-}" ]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-            echo "Docker Hub 凭据已配置：将构建并推送多架构镜像"
+          if [ "$publish" = "true" ]; then
+            if [ -z "$u" ] || printf '%s' "$u" | grep -q '[^a-z0-9._-]'; then
+              echo "::error title=Docker Hub 命名空间非法::secrets.DOCKERHUB_USERNAME = 「${u}」含非法字符（只允许小写字母 / 数字 / . _ -）。Docker Hub 命名空间强制全小写，请把该 secret 的值改成全小写后重跑。"
+              exit 1
+            fi
+            echo "镜像名 = ${u}/download-gateway（合法，将构建并推送）"
           else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=跳过镜像发布::Docker Hub 凭据未配置。请到 Settings → Secrets and variables → Actions 添加 DOCKERHUB_USERNAME 与 DOCKERHUB_TOKEN。本次仍会构建镜像以验证 Dockerfile。"
+            echo "未具备发布条件：本次只构建镜像验证 Dockerfile，不推送。"
           fi
 
   # ---------- 3) 原生矩阵构建（amd64/arm64 各自原生，避 QEMU）----------
@@ -169,7 +208,20 @@ jobs:
   # 而 ubuntu-24.04-arm 是原生 arm64 Runner，每格 5–8 分钟。
   build:
     needs: [test, gate]
-    if: github.event_name != 'pull_request'
+    # 不把 `needs.gate.result == 'success'` 写进来：gate 未过只意味着「不该推送」，
+    # 而既定策略是**每次推送都构建一遍镜像**（验证 Dockerfile 每一层都成立），
+    # 无凭据 / gate 未过只让推送降级，不让构建降级。上游 test 失败才该整体跳过。
+    # 注意：job 级 `if:` 会**替换掉** GitHub 隐式的 `success()` 门禁，
+    # 所以必须自己把 `needs.test.result` 写全（缺陷 D-13）。
+    if: ${{ !cancelled() && needs.test.result == 'success' && github.event_name != 'pull_request' }}
+    # ⚠️ 镜像名放在 **job 级 env**，而不是 job output：
+    # ① 同一个 job 内使用 secret 不受 D-12 那条限制（所有 `docker/login-action` 都这么用）；
+    # ② workflow 级 `env:` 取不到 `secrets` 上下文（D-11），只能写在这一层；
+    # ③ 刻意**不用 step output 中转**：那会引入「runner 是否也会过滤派生自 secret 的
+    #    step output」这个未经验证的假设。env 是唯一有确定行为的通道。
+    # 优先级链必须与 `gate` 里那段 shell **逐字一致**（见 gate 的注释）。
+    env:
+      IMAGE: ${{ secrets.DOCKERHUB_USERNAME || vars.DOCKERHUB_USERNAME || github.repository_owner }}/download-gateway
     strategy:
       fail-fast: false
       matrix:
@@ -188,45 +240,31 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
 
-      # 把镜像名与 --output 串**在 shell 里拼好并打印**，而不是用内联 ${{ format(...) }}：
-      # ① 出问题时人眼能直接看到真实取值；② 空值在这里 fail fast，
-      #    不至于让 buildx 丢一句 "tag is needed when pushing to registry" 让人去猜
-      #    （该错误来自 buildx/build/build.go 的 prepareMultiDriverExports：
-      #      push=true 但 name= 为空时抛出，所以「name 为空」是唯一可能的原因）。
-      - name: 解析镜像名与 output 串
-        id: params
-        env:
-          SECRET_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          VAR_USER: ${{ vars.DOCKERHUB_USERNAME }}
-          OWNER: ${{ github.repository_owner }}
-          PUBLISH: ${{ needs.gate.outputs.publish }}
+      # fail fast：把「镜像名有没有拿到」变成**立刻可见、且明确指出原因**的失败，
+      # 而不是等 buildx 丢一句谜语（D-12 的教训）：
+      #   ERROR: failed to build: tag is needed when pushing to registry
+      # 那句来自 buildx `build/opt.go` 的 toSolveOpt()：
+      #   if e.Type == "image" && e.Attrs["name"] == "" && e.Attrs["push"] != "" { ... }
+      # —— 判据就是「导出器叫 image、push 为真、但 name 是空串」，仅此一条。
+      # （上一版注释把它记成了 prepareMultiDriverExports，那是多驱动路径的同类检查，
+      #   与单节点 buildx 无关，已纠正。）
+      - name: 自检 · 构建参数
         run: |
           set -uo pipefail
-          u="${SECRET_USER:-}"
-          [ -n "$u" ] || u="${VAR_USER:-}"
-          [ -n "$u" ] || u="${OWNER:-}"
-          u="$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')"
-          if ! printf '%s' "$u" | grep -qE '^[a-z0-9][a-z0-9._-]*$'; then
-            echo "::error::无法解析出合法的 Docker Hub 命名空间：「${u}」"
-            exit 1
-          fi
-          IMG="${u}/download-gateway"
-          if [ "${PUBLISH}" = "true" ]; then
-            OUT="type=image,name=${IMG},push-by-digest=true,name-canonical=true,push=true"
-          else
-            OUT=""
-          fi
-          echo "image=${IMG}" >> "$GITHUB_OUTPUT"
-          echo "outputs=${OUT}" >> "$GITHUB_OUTPUT"
-          echo "解析结果 image=${IMG} publish=${PUBLISH} outputs=${OUT}"
+          case "${IMAGE:-}" in
+            ""|"/download-gateway")
+              echo "::error title=镜像名解析失败::IMAGE=「${IMAGE:-}」为空。请检查 Settings → Secrets and variables → Actions 里的 DOCKERHUB_USERNAME（或 DOCKERHUB_USERNAME 仓库变量）。"
+              exit 1
+              ;;
+          esac
+          echo "镜像名已解析：${IMAGE}（该值派生自 secret，GitHub 在日志里会打码成 *** —— 属于预期）"
           {
             echo "### 构建参数 · ${{ matrix.platform }}"
             echo ""
-            echo "镜像名 \`${IMG}\`"
-            echo ""
-            echo "publish \`${PUBLISH}\`"
-            echo ""
-            echo "outputs \`${OUT}\`"
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 镜像名 | \`${IMAGE}\` |"
+            echo "| publish | \`${{ needs.gate.outputs.publish }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 登录 Docker Hub（仅发布时需要）
@@ -239,7 +277,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.params.outputs.image }}
+          images: ${{ env.IMAGE }}
 
       - name: 构建镜像${{ needs.gate.outputs.publish == 'true' && '并推送' || '（仅验证，不推送）' }}
         id: build
@@ -250,7 +288,7 @@ jobs:
           # 推送由 outputs 里的 `push=true` 控制 —— push-by-digest 必须用 `outputs` 形式，
           # 不能用 `push:` 快捷写法（那会退化成普通 tag 推送，拿不到逐架构 digest）。
           # 无凭据时 outputs 为空 ⇒ 只构建进 buildx 缓存（**Dockerfile 每一层仍被完整验证**）。
-          outputs: ${{ steps.params.outputs.outputs }}
+          outputs: ${{ needs.gate.outputs.publish == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || '' }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -260,9 +298,9 @@ jobs:
       # "Must have admin rights to Repository"），而失败步骤的错误注解是公开可读的。
       # 失败时把构建参数塞进 ::error::，排障就不必依赖日志。
       - name: 失败时输出构建参数（诊断）
-        if: failure() && steps.params.outcome == 'success'
+        if: failure() && steps.build.outcome == 'failure'
         run: |
-          echo "::error title=构建参数::image=${{ steps.params.outputs.image }} | publish=${{ needs.gate.outputs.publish }} | outputs=${{ steps.params.outputs.outputs }}"
+          echo "::error title=构建参数::image=${{ env.IMAGE }} | publish=${{ needs.gate.outputs.publish }} | outputs=${{ needs.gate.outputs.publish == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || '<空>' }}"
 
       - name: 收集 digest
         if: needs.gate.outputs.publish == 'true' && steps.build.outcome == 'success'
@@ -282,8 +320,15 @@ jobs:
   # ---------- 4) 合并为多架构 manifest ----------
   merge:
     needs: [build, gate]
-    if: github.event_name != 'pull_request' && needs.gate.outputs.publish == 'true'
+    # 三个条件都要**显式**写：job 级 `if:` 会替换掉 GitHub 隐式的 `success()`（缺陷 D-13），
+    # 而这里既要求「有凭据」也要求「两个架构都真的构建成功」，
+    # 否则会用残缺的 digest 集合并出一个少架构的 manifest —— 那种错最难看：CI 全绿，镜像却是残的。
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.gate.outputs.publish == 'true' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
+    # 同 build：镜像名走 job 级 env，不走 job output（缺陷 D-12）。
+    # 优先级链与 gate / build **逐字一致**。
+    env:
+      IMAGE: ${{ secrets.DOCKERHUB_USERNAME || vars.DOCKERHUB_USERNAME || github.repository_owner }}/download-gateway
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -298,29 +343,43 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ needs.gate.outputs.image }}
+          images: ${{ env.IMAGE }}
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
+      # 自检：digest 集合必须**恰好两个**。少一个就会合出残缺 manifest，
+      # 多一个说明矩阵被改过而这里没同步 —— 两种都该立刻停下。
+      - name: 自检 · digest 数量
+        working-directory: /tmp/digests
+        run: |
+          set -uo pipefail
+          n=$(ls -1 | wc -l | tr -d ' ')
+          echo "收到 $n 个 digest：$(ls -1 | tr '\n' ' ')"
+          if [ "$n" -ne 2 ]; then
+            echo "::error title=digest 数量异常::期望 2 个（amd64 + arm64），实际 ${n} 个。拒绝合并出残缺 manifest。"
+            exit 1
+          fi
       - name: Create multi-arch manifest
         working-directory: /tmp/digests
         run: |
+          set -uo pipefail
           docker buildx imagetools create \
             $(jq -cr '.tags|map("-t "+.)|join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf "${{ needs.gate.outputs.image }}@sha256:%s " *)
+            $(printf "${IMAGE}@sha256:%s " *)
       - name: Verify manifest
         run: |
-          docker buildx imagetools inspect ${{ needs.gate.outputs.image }}:${{ steps.meta.outputs.version }}
+          set -uo pipefail
+          docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"
           echo "### 多架构 manifest 已发布" >> "$GITHUB_STEP_SUMMARY"
-          docker buildx imagetools inspect --raw ${{ needs.gate.outputs.image }}:${{ steps.meta.outputs.version }} \
+          docker buildx imagetools inspect --raw "${IMAGE}:${{ steps.meta.outputs.version }}" \
             | jq -r '.manifests[] | "| \(.platform.architecture) | \(.platform.os) | \(.digest) |"' \
             | { echo "| arch | os | digest |"; echo "|---|---|---|"; cat; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 失败时输出合并参数（诊断）
         if: failure()
         run: |
-          echo "::error title=合并参数::image=${{ needs.gate.outputs.image }} | version=${{ steps.meta.outputs.version }} | tags=${{ steps.meta.outputs.tags }}"
+          echo "::error title=合并参数::image=${IMAGE} | version=${{ steps.meta.outputs.version }} | tags=${{ steps.meta.outputs.tags }}"
 
