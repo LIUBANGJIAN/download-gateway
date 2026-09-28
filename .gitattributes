@@ -1,0 +1,22 @@
+# 统一换行符为 LF —— T01 验收项「LF 强制生效」
+# 设计文档与全部源码（含 .sql / .yml / .rs / .md）都必须是 LF，
+# 否则 CI 的 shell 脚本与 Dockerfile 在 Linux runner 上会出现 CRLF 问题。
+* text=auto eol=lf
+
+# 明确二进制，防止 git 试图做行尾转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.exe  binary
+
+# Windows 特有脚本保留 CRLF（若日后加入）
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 锁文件与 SQL 不参与 diff 统计
+Cargo.lock  -diff linguist-generated
+*.sql       text eol=lf
+Dockerfile  text eol=lf

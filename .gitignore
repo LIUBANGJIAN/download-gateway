@@ -1,0 +1,51 @@
+# ---- 凭据与真实环境信息：**绝不入库**（仓库为 public，泄露不可撤销）----
+# 依据 02 §5.5「凭据与隐私脱敏闸门」
+#
+# 这里用通配写法兜住各类 `*.token.txt`，**不逐个列具体文件名**：
+# 逐名列举会让本文件变成一份「敏感文件清单」，反而更容易被漏改。
+/doc/*.token.txt
+/doc/BitComet*.txt
+/doc/*服务器*.txt
+.env
+
+# ---- 设计文档含真实内网 IP（192.168.x.x）与实测记录 ----
+# 推送到 public 仓库前必须先脱敏；此处默认**整目录不纳入版本控制**。
+# 若日后要公开设计文档，请先按 02 §5.5 ③ 的中性化规则脱敏，
+# 再把脱敏版放进 docs/ 而不是直接放开 design/。
+/design/
+
+# ---- Rust ----
+/target
+**/*.rs.bk
+*.pdb
+
+# ---- 运行期数据（SQLite 与 WAL）----
+/data
+*.db
+*.db-wal
+*.db-shm
+
+# ---- 本地探针与记忆（不入库）----
+.probe/
+.workbuddy/
+
+# ---- 前端（T10 生成）----
+web/node_modules/
+web/dist/
+node_modules/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- 日志与构建残留 ----
+*.log
+build?.log
+cli_out.json
+f_*.txt
+f_*.json
+r_*.err
+r_*.json

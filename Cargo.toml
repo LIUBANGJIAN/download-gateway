@@ -1,0 +1,91 @@
+[workspace]
+resolver = "3"
+members = ["crates/bitcomet-api", "crates/dispatch-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# ⚠️ MSRV 不是 1.85（edition 2024 的最低要求），而是 **1.88**（T02 实测）。
+#
+# 原因：`crates/bitcomet-api/src/rncryptor.rs` 是**原样复用**的参考实现（RNCryptor v3
+# 加解密），其中用到两个晚于 1.85 稳定的标准库 API：
+#   - `slice::as_chunks`（稳定于 **1.88**）—— 分组 AES 块时使用；
+#   - 另一处 API（稳定于 **1.87**）—— 见 `rncryptor.rs`。
+# 用 `cargo clippy ... -D warnings` 会以 `clippy::incompatible-msrv` 直接报错。
+#
+# 为什么选择改 MSRV 而不是改写算法代码：密码学实现的**逐字节等价性**已由
+# `decrypts_go_generated_ciphertext` 跨语言互操作测试钉住，为了保留几个 API 的
+# 语法糖去动它，属于用「高风险改动」换「低价值收益」。构建环境本身是
+# `rust:1.98`（Dockerfile）与 CI 当前 stable，1.88 这个下限是真实且可满足的。
+rust-version = "1.88"
+license = "MIT"
+authors = ["LIUBANGJIAN"]
+repository = "https://github.com/LIUBANGJIAN/download-gateway"
+
+[workspace.dependencies]
+tokio = { version = "1.53", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "signal",
+    "sync",
+    "time",
+] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+anyhow = "1"
+thiserror = "2"
+rusqlite = { version = "0.40", features = ["bundled"] }
+# ⚠️ 版本与 feature 说明（T01 实测）：
+# `reqwest` 0.13 已把 `rustls-tls` 这个 feature **改名**为 `rustls`
+# （0.13 的 feature 表里只有 rustls / rustls-native-certs / rustls-no-provider / webpki-roots）。
+# 这里刻意锁在 **0.12 + `rustls-tls`**：
+#   ① 与 `02 §0 A-1` 已定稿的声明一致（避免文档与代码两套说法）；
+#   ② 0.12 的 `rustls-tls` 走 **ring** provider，不需要 cmake/nasm，
+#      在 amd64 与 **arm64 原生 runner** 上都更稳（0.13 默认 aws-lc-rs 构建链更重）。
+# 切 0.13 时须同步改 `02 §0 A-1` 的 feature 名，否则照文档抄会直接构建失败。
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "http2",
+] }
+
+dispatch-core = { path = "crates/dispatch-core" }
+bitcomet-api = { path = "crates/bitcomet-api" }
+
+[package]
+name = "download-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "BitComet 下载任务代理分发网关（双端口 · SQLite 单写者）"
+
+[[bin]]
+name = "download-gateway"
+path = "src/main.rs"
+
+[dependencies]
+dispatch-core.workspace = true
+bitcomet-api.workspace = true
+tokio.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = true
+codegen-units = 1

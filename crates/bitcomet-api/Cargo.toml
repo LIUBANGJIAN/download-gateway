@@ -1,0 +1,36 @@
+[package]
+name = "bitcomet-api"
+description = "BitComet WebUI API 客户端（RNCryptor v3 三段式认证）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# ---- RNCryptor v3 所需（T02 从参考实现抽取）----
+# ⚠️ 必须统一到 RustCrypto **新一代（digest 0.11）** 这一条线：
+# `sha1` 同时存在 0.10.x(digest 0.10) 与 0.11.x(digest 0.11) 两条分支，
+# 若与 `hmac` 0.13 / `pbkdf2` 0.13 混用，会因 trait 版本不同而**编译失败**，
+# 且报错信息指向 `Mac`/`KeyInit` 之类的 trait 不匹配，很难看出根因。
+aes = "0.9"
+cipher = "0.5"
+hmac = "0.13"
+sha1 = "0.11"
+sha2 = "0.11"
+pbkdf2 = "0.13"
+
+# ---- 其它 ----
+base64 = "0.23"
+uuid = { version = "1", features = ["v4"] }
+getrandom = "0.4"
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -1,0 +1,175 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # 镜像名与仓库名一致；可用仓库变量 DOCKERHUB_USERNAME 覆盖
+  IMAGE: ${{ vars.DOCKERHUB_USERNAME || github.repository_owner }}/download-gateway
+
+jobs:
+  # ---------- 0) 隐私脱敏闸门（public 仓库：命中即中止）----------
+  #
+  # 这是第二道防线。第一道是 `.gitignore`（`doc/*.token.txt`、`design/`、
+  # `.workbuddy/` 等根本不进仓库）。两层都要有：
+  # 只要有人 `git add -f` 强推了本地敏感文件，这里必须拦住。
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 扫描凭据 / 内网 IP / 弱口令
+        run: |
+          set -uo pipefail
+          # 只放**强特征**：真实 token 格式、真实私网 IP、私钥块、AWS Key、
+          # 以及「用户:口令」形态的弱口令。
+          #
+          # 刻意**不放**「明文提及敏感文件名」（如 `xxx.token.txt`）这类启发式：
+          # ① 文件名不是凭据，价值极低；
+          # ② 它是**自指**的 —— 任何解释这条规则的注释、任何列出待忽略文件的
+          #    `.gitignore` 都会命中它，导致闸门永远红灯（本地实测确实如此）。
+          #    这种「为了通过而反复改注释」的脆弱闸门比没有闸门更糟：
+          #    它会训练出「闸门红了就改注释」的坏习惯。
+          # 文件级策略交给 `.gitignore`（第一道防线）。
+          PAT='ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|dckr_pat_[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|192\.168\.[0-9]+\.[0-9]+|10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|(admin|root|user|guest):[A-Za-z0-9@._!-]{1,16}'
+          if git grep -nIE "$PAT" -- . ; then
+            echo "::error::命中敏感信息，拒绝构建与推送"
+            exit 1
+          fi
+          echo "脱敏闸门通过：未发现凭据 / 内网 IP / 弱口令"
+
+  # ---------- 1) 质量门 ----------
+  test:
+    needs: secret-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo test
+        run: cargo test --all --locked
+
+      # TLS 后端闸门：Docker/Linux 下 schannel 不存在，
+      # 一旦有人把 reqwest 改回 native-tls，这里必须失败（02 §0 A-1 / 00 §50-51）
+      - name: 闸门 · 不得引入 native-tls
+        run: |
+          if grep -qE '^name = "native-tls"$' Cargo.lock; then
+            echo "::error::Cargo.lock 含 native-tls —— Docker/Linux 下 TLS 将不可用"
+            exit 1
+          fi
+          echo "TLS 后端检查通过（未引入 native-tls）"
+
+      - uses: actions/setup-node@v4
+        if: hashFiles('web/package.json') != ''
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # T10 落地前端后自动生效；当前 web/ 尚不存在，此步会被跳过
+      - name: 前端构建
+        if: hashFiles('web/package.json') != ''
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+  # ---------- 2) 原生矩阵构建（amd64/arm64 各自原生，避 QEMU）----------
+  #
+  # 不用 QEMU 的原因（02 §5.2）：Rust 全量编译在仿真下要 40–90 分钟，
+  # 而 ubuntu-24.04-arm 是原生 arm64 Runner，每格 5–8 分钟。
+  build:
+    needs: test
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Collect digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  # ---------- 3) 合并为多架构 manifest ----------
+  merge:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+      - name: Create multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags|map("-t "+.)|join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "${{ env.IMAGE }}@sha256:%s " *)
+      - name: Verify manifest
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}

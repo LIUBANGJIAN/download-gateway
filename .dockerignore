@@ -1,0 +1,17 @@
+# 构建上下文瘦身：只把编译必需的东西送进去
+target/
+.git/
+.github/
+data/
+.probe/
+.workbuddy/
+web/node_modules/
+web/dist/
+design/
+doc/
+*.log
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+Thumbs.db
