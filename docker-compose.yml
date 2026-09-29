@@ -1,0 +1,187 @@
+# =============================================================================
+# download-gateway · 部署用 Compose（单服务）
+# -----------------------------------------------------------------------------
+# 镜像：liubangjian/download-gateway
+#       多架构 manifest（同时含 linux/amd64 与 linux/arm64），
+#       现有 tag：latest / sha-eb6a12c（二者同源）/ sha-45c62d0
+#
+# 本文件里的每一处配置都以源码为事实源核对过：
+#   Dockerfile · src/config.rs · src/main.rs · crates/bitcomet-api/src/clientid.rs
+# 凡是有坑的地方都在下面写了「为什么」，没有生造的字段。
+#
+# 快速用：
+#   docker compose up -d
+#   docker compose ps          # 等 STATUS 变成 (healthy)
+# =============================================================================
+
+services:
+  gateway:
+    # 默认跟最新 release；要可复现（同一文件永远部署同一份二进制）就固定到
+    # sha-<短SHA>。可用同目录的 .env 覆盖，无需改本文件：
+    #     IMAGE_TAG=sha-eb6a12c
+    image: liubangjian/download-gateway:${IMAGE_TAG:-latest}
+    container_name: download-gateway
+    restart: unless-stopped
+
+    ports:
+      # 对外推送口：下载客户端（Aria2 / BitComet 协议）从这里接入，必须被推送端可达。
+      - "6800:6800"
+
+      # 管理口：**只绑宿主机回环**。
+      # ⚠️ 镜像内部已把 8080 绑在 0.0.0.0（Dockerfile 的 ENV DISPATCH_ADMIN_ADDR），
+      #    容器自己收不了口 ——「管理面能不能从外部访问」**唯一**就在这一行决定。
+      #    写成 "0.0.0.0:8080:8080" 等于把管理后台直接挂到公网。
+      #    需要远程看管理台时走 SSH 隧道：
+      #        ssh -N -L 8080:127.0.0.1:8080 <user>@<server>
+      #    然后本地浏览器开 http://127.0.0.1:8080
+      #
+      # ⚠️⚠️ 如果你确实要暴露到局域网（写成 "8989:8080" 之类，让别的机器能直接打开管理台），
+      #     就必须在下面 environment 段设 DISPATCH_ADMIN_PASSWORD ——
+      #     否则口令**每次启动都重新随机生成**（只打印在 `docker logs`），
+      #     你会在登录页反复失败，并在连续 5 次失败后被锁定 5 分钟（设计 07 §5.1 防爆破退避）。
+      #     另：明文 HTTP 下 `Secure` cookie 不会被浏览器回传 —— 那是第二处必须处理的坑，
+      #     见下面 DISPATCH_ADMIN_COOKIE_SECURE 的说明。
+      - "127.0.0.1:8080:8080"
+
+    environment:
+      # ---------- client_id 的落盘目录（防御性配置，强烈建议保留）----------
+      # 先说清楚现状，免得被当成"已经生效的关键开关"：
+      #   当前二进制的主路径（src/main.rs）只用了 config + store，
+      #   client_id 的调用点在 crates/bitcomet-api/src/client.rs，尚未接进启动流程。
+      #   所以**今天**设不设它，/healthz 与 SQLite 行为完全一样（已实测）。
+      #
+      # 那为什么还要设：它是为了堵住源码注释里自己点名的那个坑。
+      # clientid.rs 的解析顺序是
+      #     DISPATCH_STATE_DIR → XDG_CONFIG_HOME → APPDATA → HOME → **可执行文件目录**
+      # 本镜像用 `useradd -r -u 10001 -m -d /data app`，HOME 正常应为 /data，
+      # 于是会落到 /data/.config/download-gateway/client_id（仍在卷内，能持久化）。
+      # 但一旦 HOME 解析成任何**不可写**目录，兜底就变成 /usr/local/bin ——
+      # 那里 uid 10001 写不进去，client_id 每次重启都会重新生成，
+      # 节点侧会不断冒出新的设备记录，而**表面看不出任何报错**。
+      # 显式指定 = 把这个不确定性彻底消掉，顺带让文件与 SQLite 同层（排障时一眼看到）。
+      DISPATCH_STATE_DIR: /data
+
+      # ---------- 日志级别（可选）----------
+      # 注意 main.rs 用 EnvFilter::try_from_default_env()：RUST_LOG 存在时**优先于**
+      # DISPATCH_LOG。两者都想要时直接用 RUST_LOG=info,dispatch_core=debug。
+      DISPATCH_LOG: ${DISPATCH_LOG:-info}
+
+      # ================= 管理台（8080）=================
+      # ---------- 管理口令 ----------
+      # 不设 = 每次启动**随机生成**并打印到启动日志（`docker logs download-gateway` 里找）。
+      # 为什么管理口一离开回环就必须设：随机口令只在**本次进程**有效，容器一重启就换掉，
+      # 用户会当成"密码错了"反复重试，然后撞上 5 次失败锁 5 分钟。
+      # 设了 = 口令稳定、可轮换（改这个变量 + 重启即可）。
+      DISPATCH_ADMIN_PASSWORD: ${DISPATCH_ADMIN_PASSWORD:-}
+
+      # ---------- 会话 Cookie 的 Secure 属性：auto / always / never ----------
+      # auto（默认）= **仅**在请求带 `X-Forwarded-Proto: https`（即真的在 TLS 反代后面）时加 Secure。
+      #
+      # ⚠️ 这是对设计文档 07 §5.1「非 127.0.0.1 即加 Secure」的**刻意偏离**，理由不是图省事：
+      #    你的访问形态是 `http://<局域网IP>:8989`（明文 HTTP + 非回环）。
+      #    按原文加 Secure，浏览器**不会**通过明文 HTTP 回传该 cookie
+      #    ⇒ 登录成功那一刻会话就丢了 ⇒ 401 ⇒ 前端跳回 /login ⇒ 死循环，**永远登不进去**。
+      #    「能登录」优先于「cookie 属性齐全」；真正的解法是给管理口配 TLS 反代，然后设 always。
+      DISPATCH_ADMIN_COOKIE_SECURE: ${DISPATCH_ADMIN_COOKIE_SECURE:-auto}
+
+      # ---------- 调试用：把管理台页面指到磁盘目录 ----------
+      # 不设 = 用编进二进制的内嵌页面（默认，开箱即用）。
+      # 设了 = 从该目录读（改完刷新即生效，不用重编译）。需配合把宿主目录挂进容器，如 `- ./web:/web`。
+      # DISPATCH_WEB_DIR: /web
+
+      # ================= 对外口（6800）=================
+      # ---------- 可选 token ----------
+      # 不设 = 6800 **完全不校验**（内网便利；设计 R9 / 02 §4.4 的默认）。
+      #        启动日志会打一条 warn 明确告诉你这一点，别以为是"没生效"。
+      # 设了之后两条协议面各自的表现：
+      #   · Aria2 面   ：params[0] 传 "token:<值>"，缺失/错误 → JSON-RPC error code -1
+      #   · BitComet 面：请求头 `Authorization: Bearer <值>`，缺失/错误 → HTTP 401 INVALID_TOKEN
+      # ⚠️ 它同时是下面那个代理自签握手的**口令判据**：设了它，客户端必须拿同一个值当
+      #    `password` 才能从 /api/webui/login 换到 invite_token —— 否则握手一律失败。
+      DISPATCH_PUBLIC_TOKEN: ${DISPATCH_PUBLIC_TOKEN:-}
+
+      # ---------- 对外口是否回 CORS ----------
+      # false（默认）= 不回 Access-Control-Allow-Origin ⇒ AriaNg 等**浏览器**客户端直连会被拦。
+      # true         = 回 `Access-Control-Allow-Origin: *` 并处理 OPTIONS 预检。
+      # ⚠️ 开它就必须同时设 DISPATCH_PUBLIC_TOKEN：否则**任何你访问过的网页**都能跨源往这台
+      #    NAS 投递任务（drive-by）。启动时若检测到「开了 CORS 却没设 token」会打 warn。
+      # 更稳的做法：让 AriaNg 与网关**同源**（同一个反代 / 同站路径），压根不需要 CORS。
+      DISPATCH_PUBLIC_CORS: ${DISPATCH_PUBLIC_CORS:-false}
+
+      # ---------- 是否允许「连节点上的文件一起删」 ----------
+      # false（默认）= 管理台/接口里带 delete_files=true 的删除一律被 **422 拒绝**。
+      # 为什么默认关：删除命中磁盘文件**不可逆**；且节点侧删除能力（T05）尚未落地，
+      # 现在放开等于让一个还没接通的开关可被误触。
+      DISPATCH_ALLOW_FILE_DELETE: ${DISPATCH_ALLOW_FILE_DELETE:-false}
+
+      # ---------- 以下四项镜像 ENV 已设，**无需重复声明** ----------
+      # 列在这里只为说明「想改的时候坑在哪」：
+      #   DISPATCH_DB=/data/dispatch.db
+      #   DISPATCH_MIGRATIONS=/opt/download-gateway/migrations
+      #   DISPATCH_PUBLIC_ADDR=0.0.0.0:6800
+      #   DISPATCH_ADMIN_ADDR=0.0.0.0:8080
+      #
+      # ⚠️ 若把 DISPATCH_ADMIN_ADDR 改回代码里的默认值 127.0.0.1:8080，
+      #    容器内的 HEALTHCHECK 仍然通，但宿主的 `ports: 127.0.0.1:8080:8080` 会连不上 ——
+      #    Docker 端口映射是从容器网络命名空间**之外**打进去的，绕过容器内回环。
+      #    要去掉这个矛盾，只能把上面的 ports 改成 network_mode: host（不推荐）。
+      #
+      # ⚠️ 若把 DISPATCH_PUBLIC_ADDR 改成 127.0.0.1:6800，同理 ⇒ "6800:6800" 失效。
+
+    volumes:
+      # 默认用**命名卷**：Docker 首次挂载会把镜像内 /data 的属主（uid 10001）带过来，
+      # 所以不需要手工 chown，换宿主机也不用改。
+      - gateway-data:/data
+
+      # 想直接看到 SQLite 文件（备份 / 排查）就改用宿主目录挂载。
+      # ⚠️ 必须先建目录再改属主，顺序不能省：
+      #     mkdir -p ./data && sudo chown -R 10001:10001 ./data
+      # 漏掉 chown 的症状（02 §5.8 已记）：unable to open database file / readonly database
+      # - ./data:/data
+
+    healthcheck:
+      # 与 Dockerfile 内建的那条一致（在这里再声明一次，是为了让 `docker compose ps`
+      # 与后续 depends_on: service_healthy 有权威来源）。
+      # 管理口 /healthz 会**真跑一次 SELECT 1**，库不通时返回 503 ⇒ curl -f 判定为 unhealthy。
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+    # ---------- 这一条不是可选，是必须的 ----------
+    # src/main.rs 的优雅退出只等 `tokio::signal::ctrl_c()`。查 tokio 1.53 源码：
+    #     signal/unix.rs:  pub(crate) fn ctrl_c() -> io::Result<Signal> {
+    #                          signal(SignalKind::interrupt())
+    #                      }
+    # 即 Unix 下**只监听 SIGINT(2)**，SIGTERM 没有任何处理器。
+    # 而 `docker stop` 默认发 SIGTERM；加上 ENTRYPOINT 直接是二进制、没有 init，
+    # 应用就是 PID 1，内核**不对 PID 1 套用信号的默认处置**（无处理器 = 忽略），
+    # ⇒ SIGTERM 被静静忽略，只能干等满 stop_grace_period（默认 10s）再 SIGKILL，
+    #    于是 store.shutdown()（关停 actor、排空 mpsc、正常关库）**永远执行不到**。
+    # 后果不算数据损坏（WAL + synchronous=NORMAL，SQLite 本身崩溃可恢复），
+    # 但「代码写了优雅退出，实际从不生效」是个安静的偏差，必须在这里掰回来。
+    stop_signal: SIGINT
+
+    # 可选加固：容器不需要任何提权路径
+    security_opt:
+      - no-new-privileges:true
+
+    # 可选加固（**未实测**，启用前请先自己跑一遍 —— 本机没有 docker）：
+    # 应用只写 /data，日志走 stdout，理论上可以把根文件系统设为只读。
+    # 启用后如启动失败，去掉这三行即可。
+    # read_only: true
+    # tmpfs:
+    #   - /tmp
+
+    # 日志落盘上限，防止 json-file 驱动把宿主磁盘写满
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  gateway-data:
+    # 由 Compose 管理的命名卷，实际位置可用 `docker volume inspect` 查。
+    # 想固定宿主机路径就换 driver_opts，但那会把可移植性换成硬编码路径，一般不值得。

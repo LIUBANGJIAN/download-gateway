@@ -1,0 +1,115 @@
+/* 下载网关管理台样式（原生 CSS，零构建）。视觉对齐设计稿：卡片 / 表格 / 徽标 / 错误条 / 危险红。 */
+
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --border: #262b36;
+  --text: #e6e8ec;
+  --muted: #8b93a3;
+  --accent: #3b82f6;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --danger: #ef4444;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+.banner {
+  background: #3a2d05;
+  color: #fde68a;
+  border-bottom: 1px solid #5a4508;
+  padding: 10px 16px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.brand { font-weight: 700; letter-spacing: 0.5px; }
+.nav { display: flex; gap: 8px; }
+
+.nav-btn, button {
+  background: #232838;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.nav-btn:hover, button:hover { border-color: var(--accent); }
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.view { padding: 16px; max-width: 1080px; margin: 0 auto; }
+h2 { font-size: 16px; color: var(--muted); font-weight: 600; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.login-card { max-width: 360px; margin: 48px auto; }
+
+label { display: block; margin-bottom: 12px; color: var(--muted); }
+input, select, textarea {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #0f1218;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #232838;
+  color: var(--warn);
+}
+
+.toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+.table th { color: var(--muted); font-weight: 600; }
+
+.error-bar, .ok-bar {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+.error-bar { background: #3a1414; color: #fca5a5; border: 1px solid #7f1d1d; }
+.ok-bar { background: #14331f; color: #86efac; border: 1px solid #166534; }
+.empty { color: var(--muted); padding: 24px; text-align: center; }
+.danger { color: var(--danger); }

@@ -1,10 +1,26 @@
 //! 调度核心。
 //!
 //! T01 阶段只含**存储层**（`store`）：SQLite 单写者 actor + 迁移框架。
-//! 后续任务会在这里追加：`health`（T03）、`scheduler`（T04）、`task`（T05）、
-//! `sync`（T06）、`dedup`（T07）、`ingress`（T08/T09）、`admin`（T10）、`naming`（T13）。
+//! 本轮增量（T08α/T09α/T10α）在此追加：
+//!
+//! | 模块 | 职责 |
+//! |---|---|
+//! | [`state`] | 两端口各自的共享状态（`PublicState` / `AdminState` / `AdminPolicy` / `EnvSnapshot`） |
+//! | [`ids`] | GID / task_id（ULID）/ 128 位随机十六进制，纯函数可单测 |
+//! | [`health`] | `/healthz` 响应体（契约与旧 `main.rs::healthz` 逐字节一致，含 503） |
+//! | [`tasks`] | 任务域：**★唯一入库入口 `create_task`** + 读路径 + 行解码 + 状态映射 |
+//! | [`ingress`] | 对外口（6800）：Aria2 兼容面 + BitComet 兼容面 + 自签三段式握手 |
+//! | [`admin`] | 管理口（8080）：会话 + REST + 内嵌零构建 Web 管理台 |
+//!
+//! 后续任务会继续追加：`scheduler`（T04）、`sync`（T06）、`dedup`（T07）、`naming`（T13）。
 
+pub mod admin;
+pub mod health;
+pub mod ids;
+pub mod ingress;
+pub mod state;
 pub mod store;
+pub mod tasks;
 
 /// 本 crate 版本（供 `/healthz` 与日志上报）。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -16,6 +16,14 @@ serde_json.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
+# ---- 本次增量新增 ----
+axum.workspace = true          # ingress/admin 的 Router/State/Json/Path/Query/ConnectInfo
+bitcomet-api.workspace = true   # 复用 rncryptor::decrypt + clientid::new_uuid/load_or_create_client_id
+# getrandom 版本必须与 crates/bitcomet-api 一致（0.4 已把 API 改名为 `getrandom::fill`）。
+# 若误写 0.2，会因 `getrandom::getrandom` 不存在而编译失败。
+getrandom = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+# tower 已是 axum 的传递依赖，仅 dev 用途（Router::oneshot 集成测试），不新增第三方 crate。
+tower = { version = "0.5", features = ["util"] }

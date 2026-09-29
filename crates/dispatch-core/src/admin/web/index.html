@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>下载网关 · 管理台</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <!-- 启动横幅：T03–T07 未落地，务必让用户一眼看到「任务只是被受理，并未真正下载」 -->
+  <div id="banner" class="banner" role="status">
+    ⚠️ 本轮仅受理任务，调度/下发未启用 —— 任务停在 queued，不会真正下载。
+  </div>
+
+  <header class="topbar">
+    <span class="brand">下载网关 · 管理台</span>
+    <nav class="nav">
+      <button class="nav-btn" data-view="overview">总览</button>
+      <button class="nav-btn" data-view="tasks">任务</button>
+      <button class="nav-btn" data-view="new">添加</button>
+      <button class="nav-btn" id="logout-btn">退出</button>
+    </nav>
+  </header>
+
+  <!-- 登录屏 -->
+  <section id="view-login" class="view">
+    <div class="card login-card">
+      <h2>登录</h2>
+      <form id="login-form">
+        <label>管理口令
+          <input type="password" id="login-password" autocomplete="current-password" required />
+        </label>
+        <button type="submit" class="primary">登录</button>
+      </form>
+      <div id="login-error" class="error-bar" hidden></div>
+    </div>
+  </section>
+
+  <!-- 总览屏 -->
+  <section id="view-overview" class="view" hidden>
+    <h2>总览</h2>
+    <div id="overview-grid" class="grid"></div>
+    <div id="overview-counts" class="counts"></div>
+  </section>
+
+  <!-- 任务屏 -->
+  <section id="view-tasks" class="view" hidden>
+    <h2>任务</h2>
+    <div class="toolbar">
+      <input id="task-search" type="search" placeholder="按 URL / 名称搜索…" />
+      <button id="task-refresh">刷新</button>
+    </div>
+    <div id="task-error" class="error-bar" hidden></div>
+    <table class="table">
+      <thead>
+        <tr><th>状态</th><th>名称</th><th>类型</th><th>进度</th><th>创建时间</th><th>操作</th></tr>
+      </thead>
+      <tbody id="task-rows"></tbody>
+    </table>
+    <div id="task-empty" class="empty" hidden>暂无任务</div>
+  </section>
+
+  <!-- 添加屏 -->
+  <section id="view-new" class="view" hidden>
+    <h2>添加任务</h2>
+    <div class="card">
+      <form id="create-form">
+        <label>链接（http/ftp/magnet/.torrent）
+          <textarea id="create-url" rows="3" required></textarea>
+        </label>
+        <label>类型
+          <select id="create-kind">
+            <option value="http">http</option>
+            <option value="bt">bt</option>
+            <option value="magnet">magnet</option>
+            <option value="torrent">torrent</option>
+          </select>
+        </label>
+        <label>文件名（可选）
+          <input id="create-filename" type="text" />
+        </label>
+        <button type="submit" class="primary">受理任务</button>
+      </form>
+      <div id="create-result" class="ok-bar" hidden></div>
+      <div id="create-error" class="error-bar" hidden></div>
+    </div>
+  </section>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
