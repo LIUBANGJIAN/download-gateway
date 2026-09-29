@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn five_failures_lock_then_success_clears() {
         let g = LoginGuard::new();
-        let ip: IpAddr = "192.168.1.5".parse().unwrap();
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
         for _ in 0..4 {
             g.record_failure(ip, 1000);
             assert!(g.locked_until(ip, 1000).is_none(), "不足 5 次不应锁定");

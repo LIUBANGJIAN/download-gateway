@@ -492,13 +492,13 @@ mod tests {
     #[test]
     fn login_rate_limit_allows_30_then_denies() {
         let t = HandshakeStore::new();
-        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let ip: IpAddr = "198.51.100.7".parse().unwrap();
         for _ in 0..LOGIN_RATE_PER_MIN {
             assert!(t.check_login_rate(ip, 1000), "第 30 次以内应放行");
         }
         assert!(!t.check_login_rate(ip, 1000), "第 31 次应被拒");
         // 换一个 IP 不受影响
-        let ip2: IpAddr = "10.0.0.2".parse().unwrap();
+        let ip2: IpAddr = "198.51.100.8".parse().unwrap();
         assert!(t.check_login_rate(ip2, 1000));
         // 窗口滑动后恢复
         assert!(t.check_login_rate(ip, 1000 + 61));
