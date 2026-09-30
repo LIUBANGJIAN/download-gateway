@@ -56,9 +56,19 @@ PUB="http://127.0.0.1:${PUB_PORT}"
 ADM="http://127.0.0.1:${ADM_PORT}"
 COOKIE_JAR="$(mktemp)"
 
+# 断言计数：**每一条断言（无论过没过）都要计入 CHECKS**。
+# 为什么非要这个计数器：本脚本刻意不用 `set -e`（要跑完全部断言再汇总），
+# 代价是"脚本中途没跑起来"与"全部通过"在退出码上**长得一样**（都是 0）。
+# 于是有一个最危险的失败模式 —— **空转的绿**。
+# 这个计数器 + 末尾的下限校验，就是专门堵它的。
 FAILS=0
-pass() { printf '  [OK]   %s\n' "$1"; }
-fail() { printf '  [FAIL] %s\n' "$1"; FAILS=$((FAILS + 1)); }
+CHECKS=0
+pass() { printf '  [OK]   %s\n' "$1"; CHECKS=$((CHECKS + 1)); }
+fail() {
+  printf '  [FAIL] %s\n' "$1"
+  CHECKS=$((CHECKS + 1))
+  FAILS=$((FAILS + 1))
+}
 
 cleanup() {
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
@@ -401,29 +411,76 @@ code="$(printf '%s' "$resp" | tail -1)"
 expect "PUT ${ADM}/api/admin/config（关闭安全阀）" 422 "$code" "$(printf '%s' "$resp" | sed '$d')"
 
 echo
-echo "── 12. 容器日志（尾部，供排障）─────────────────────────────────"
+echo "── 12. 实测证据（这一节是给「空转的绿」上的锁）──────────────────"
+# 起因：smoke 作业第一次跑 CI 时**全绿**，但总耗时 13 秒、"容器冒烟"这一步只占 3 秒 ——
+# 对「拉镜像 + 启容器 + 40 多条 HTTP 断言」来说快得可疑。
+#
+# 一个**可能是空转的绿**比一个红叉危险得多：红叉会让人去看，空转的绿会被当成
+# "验过了"直接签收。而作业日志正文通过 API 拉取需要管理员权限（未认证 403），
+# **注解（annotation）却是公开可读的** ——
+# 所以把"我到底测了哪一枚镜像、跑了多少条断言、应用自报什么版本"做成 ::notice。
+# 这样任何人（包括没有仓库权限的人）都能从 run 页面直接读到，不必依赖日志。
+# 下限取 40：当前断言规模是静态 50 个调用点（`expect` 22 / `expect_contains` 21 /
+# `expect_absent` 7），循环展开后运行时更多（2 个端口、7 个静态资源、4 个导航、3 个只读路径）。
+# 取一个有富余的值，而不是贴着实际条数 —— 将来正常增删几条断言不应该把这条锁弄红；
+# 它的职责只是抓"脚本半途没跑起来"，不是精确对账。
+MIN_CHECKS=40
+
+RUNNING="$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo 'false')"
+IMG_DIGEST="$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE" 2>/dev/null || echo '')"
+if [ -z "$IMG_DIGEST" ]; then
+  # 本地构建（无 RepoDigests）时退化为容器实际使用的 image ID。
+  IMG_DIGEST="$(docker inspect -f '{{.Image}}' "$CONTAINER" 2>/dev/null || echo '未知')"
+fi
+# 从健康检查里取应用**自己报**的版本号 —— 能拿到它就证明容器里的进程真的起来并响应了。
+VER="$(curl -s --max-time 5 "${ADM}/healthz" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+
+echo "  容器仍在运行        : ${RUNNING}"
+echo "  被验证镜像的 digest : ${IMG_DIGEST}"
+echo "  断言总数 / 失败数   : ${CHECKS} / ${FAILS}"
+echo "  应用自报版本        : ${VER:-（未取到）}"
+
+echo
+echo "── 13. 容器日志（尾部，供排障）─────────────────────────────────"
 docker logs "$CONTAINER" 2>&1 | tail -30
 
 echo
 echo "==================================================================="
+# 锁 ①：断言数低于下限 ⇒ 脚本八成半途没跑起来。**"什么都没跑"永远不能是绿的。**
+# 这是本脚本唯一能在"没红"的情况下抓到"没干活"的机制，别删。
+if [ "$CHECKS" -lt "$MIN_CHECKS" ]; then
+  echo "::error title=冒烟断言数异常::只执行了 ${CHECKS} 条断言（下限 ${MIN_CHECKS}）——脚本可能在半途退出，本次结果**不可采信**。"
+  exit 1
+fi
+
 if [ "$FAILS" -eq 0 ]; then
-  echo " 冒烟全部通过"
+  echo " 冒烟全部通过：${CHECKS} 条断言"
+  # 锁 ②：证据打成**公开可读的注解**（作业日志要管理员权限，注解不要）。
+  echo "::notice title=容器冒烟通过::断言=${CHECKS} 条全部通过 | 镜像=${IMAGE} | digest=${IMG_DIGEST} | 应用自报版本=${VER:-未知}"
   {
     echo "### 容器冒烟 · 全部通过"
     echo ""
-    echo "镜像 \`${IMAGE}\` 已真实启动并逐面验证："
+    echo "镜像 \`${IMAGE}\` 已真实启动并逐面验证（**共 ${CHECKS} 条断言**）："
+    echo ""
+    echo "| 项 | 值 |"
+    echo "|---|---|"
+    echo "| 被验证镜像 | \`${IMAGE}\` |"
+    echo "| 镜像 digest | \`${IMG_DIGEST}\` |"
+    echo "| 应用自报版本 | \`${VER:-未知}\` |"
+    echo "| 断言总数 | ${CHECKS} |"
+    echo "| 失败数 | ${FAILS} |"
     echo ""
     echo "- 健康检查（对外口 + 管理口）"
     echo "- aria2 原生协议面：无 token 拒绝 / 错 token 拒绝 / 正确 token 放行"
     echo "- BitComet 原生协议面：无 Bearer 401 INVALID_TOKEN / 错 Bearer 401 / 正确 Bearer 放行 / 握手第一步免凭据"
-    echo "- 管理口：登录（错误口令必须 401）/ 只读接口"
+    echo "- 管理口：登录（错误口令必须 401）/ 会话 Cookie 名须恰为 sid / 页面与静态资源 / 只读接口"
     echo "- 节点：增删改 + 启停开关 + 密码回看 + 限速 KB/s↔B/s 折算 + 探测离线路径"
     echo "- 策略：保存与回读 + 越界优先级 / 未知键 / 关闭安全阀 均须 422"
     echo "- **管理台不得能提交任务**（\`POST /api/admin/tasks\` 与 \`GET /tasks/new\` 都必须不存在）"
   } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
   exit 0
 else
-  echo " 冒烟失败 ${FAILS} 处"
-  echo "::error title=容器冒烟失败::共 ${FAILS} 条断言未通过。请查看上方 [FAIL] 行（含实际 HTTP 状态码与响应片段）。"
+  echo " 冒烟失败 ${FAILS} 处（共 ${CHECKS} 条断言）"
+  echo "::error title=容器冒烟失败::共 ${FAILS}/${CHECKS} 条断言未通过。请查看上方 [FAIL] 行（含实际 HTTP 状态码与响应片段）。"
   exit 1
 fi
