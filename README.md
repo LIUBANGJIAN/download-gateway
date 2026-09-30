@@ -278,7 +278,9 @@ IMAGE_TAG=sha-eb6a12c docker compose up -d       # 或写进同目录的 .env
   以后打了 `v0.2.0`，其后的提交自然接成 `0.2.1`、`0.2.2`……
 - 这个号出现在三处，便于识别「本地/线上跑的到底是哪一版」：
   1. **镜像标签**：`v0.1.N` 与 `0.1.N`（挂在多架构 manifest 上）；
-  2. `docker inspect` 的 `org.opencontainers.image.version`（OCI 标签）；
+  2. `docker inspect` 的 `org.opencontainers.image.version`（OCI 标签；**CI 冒烟同样会断言它等于本次版本** ——
+     这一条曾经静默失效过：build 作业的 metadata-action 未给 `tags:` 时会由默认规则推出分支名 `main`，
+     并以命令行 `--label` 盖掉 Dockerfile 里的 `LABEL`，而当时没有任何断言盯着它）；
   3. **容器内 `/healthz` 的 `version` 字段**（二进制自报；CI 冒烟会拿它与本次期望版本**逐字比对**）。
 - **`Cargo.toml` 里的 `0.1.0` 是基线版本，不随提交变动。** 刻意如此：让 CI 反向提交版本文件会造成
   「提交 → 触发 CI → 又提交 → 再触发」的自我触发循环。因此用**编译期注入**
@@ -456,7 +458,7 @@ IMAGE=liubangjian/download-gateway:sha-<短SHA> bash .github/scripts/smoke.sh
    但**注解是公开可读的**。所以脚本在成功时打一条 `::notice`，内容形如：
 
    ```
-   容器冒烟通过 断言=67 条全部通过 | 镜像=…/download-gateway:sha-<短SHA>
+   容器冒烟通过 断言=68 条全部通过 | 镜像=…/download-gateway:sha-<短SHA>
                 | digest=sha256:7c73…7c1a | 应用自报版本=0.1.N
    ```
 

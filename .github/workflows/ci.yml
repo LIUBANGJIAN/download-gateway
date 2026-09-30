@@ -174,9 +174,15 @@ jobs:
           set -uo pipefail
           BASE="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || true)"
           if [ -z "$BASE" ]; then
-            echo "::warning title=版本号兜底::找不到 semver tag，退回 0.1.0"
-            echo "app_version=0.1.0" >> "$GITHUB_OUTPUT"
-            exit 0
+            # ⚠️ **刻意不做静默兜底**（红队审查 F3）。原实现是打一条 `::warning` 然后退回 `0.1.0`。
+            # 为什么那是个陷阱：build 注入的版本与冒烟断言的期望版本**同出一个来源**，
+            # 兜底一旦生效，两侧会一起退成 `0.1.0` ⇒ 「容器自报 == 期望」三条全等 ⇒
+            # **CI 全绿，而版本号是错的**。也就是说，那条断言只能证明"注入链没断"，
+            # 永远证不了"版本算得对"；兜底就等于把这个盲区主动打开。
+            # 本仓库确证存在 `v0.1.0`，所以 `git describe` 失败只可能意味着
+            # **checkout 坏了**（fetch-depth 退化、或 tag 没推上来）—— 这种故障必须红。
+            echo "::error title=版本号无法计算::checkout 里找不到任何 semver tag（如 v0.1.0）。请查本步骤的 fetch-depth 是否为 0、以及 tag 是否已 push 到远端。刻意不做静默兜底：兜底会让版本号悄悄退成 0.1.0，而下游断言因两侧同源照样全绿。"
+            exit 1
           fi
           BASE_NUM="${BASE#v}"
           MAJ="${BASE_NUM%%.*}"
@@ -338,6 +344,24 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
+          # ⚠️ 这段 tags **不是为了打标签**（本步骤的推送走 `outputs: push-by-digest`，
+          # tags 根本不参与推送），而是为了**喂 `version` 输出**。
+          #
+          # 背景（红队审查发现，是一处静默错误）：metadata-action 会由 tags 推导出
+          # 默认标签 `org.opencontainers.image.version`；而**默认** tags 里含
+          # `type=ref,event=branch` ⇒ main 分支上推出的是 **`main`**。
+          # 下面 `labels: ${{ steps.meta.outputs.labels }}` 会把它以 `--label` 交给 buildx，
+          # 而**命令行的 `--label` 会盖掉 Dockerfile 里的同名 `LABEL`** ——
+          # 于是 Dockerfile 里那条 `LABEL ... ${APP_VERSION}` 白写了，
+          # `docker inspect` 看到的是 `main`，而 README 承诺的是版本号。
+          # 更糟的是：CI 对这一点**没有任何断言**，所以它会一直绿着。
+          #
+          # 修法刻意选「根上不产生冲突」，而不是「用自定义 label 覆盖默认 label」——
+          # 后者依赖 label 的先后顺序（谁覆盖谁取决于 metadata-action 内部顺序，
+          # 且 buildx 取最后一个），本机无法验证，属于脆弱假设。
+          # 这里给出**唯一**的 raw tag，推导出的版本就只可能等于本次版本。
+          tags: |
+            type=raw,value=${{ needs.gate.outputs.app_version }}
 
       - name: 构建镜像${{ needs.gate.outputs.publish == 'true' && '并推送' || '（仅验证，不推送）' }}
         id: build

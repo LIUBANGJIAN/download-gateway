@@ -431,9 +431,13 @@ echo "── 12. 实测证据（这一节是给「空转的绿」上的锁）─
 # `expect_absent` 7），循环展开后运行时更多（2 个端口、7 个静态资源、4 个导航、3 个只读路径）。
 # 取一个有富余的值，而不是贴着实际条数 —— 将来正常增删几条断言不应该把这条锁弄红；
 # 它的职责只是抓"脚本半途没跑起来"，不是精确对账。
-# 实测锚点：2026-09-30 的 CI 运行报出 66 条；之后加入「版本号注入生效」1 条 ⇒ CI 下应为 67。
-# 40 对 67 仍有约四成富余，**不跟着 +1** —— 这条锁是粗粒度的，一旦变成精确对账，
+# 实测锚点：2026-09-30 的 CI 运行报出 66 条；之后加入「版本号注入生效」与
+# 「镜像 OCI 版本标签正确」共 2 条 ⇒ CI 下应为 68。
+# 40 对 68 仍有约四成富余，**不跟着 +1** —— 这条锁是粗粒度的，一旦变成精确对账，
 # 每次加断言都得改它，迟早被人当噪音删掉（那才是真正的损失）。
+# 已知盲区（红队审查确认）：它只抓「整个脚本没跑到 N 条」，抓不到「某一类断言整体没跑、
+# 而其它类凑够了 40」。至于"中途死"：`set -u` 下的中止会带非零退出码，作业仍会红，
+# 只是丢了"结果不可采信"这条诊断。要再严就该按小节分别下界，属另一件事。
 MIN_CHECKS=40
 
 RUNNING="$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo 'false')"
@@ -465,6 +469,30 @@ elif [ -n "${GITHUB_ACTIONS:-}" ]; then
   fail "CI 环境下 EXPECT_VERSION 为空 —— 版本号断言被静默跳过（请查 ci.yml 里 gate 的 app_version 是否算出来、是否传到了 smoke 作业）"
 else
   echo "  [SKIP] 本地手动运行且未提供 EXPECT_VERSION，跳过版本号断言（CI 下走不到这个分支）"
+fi
+
+# 断言：镜像里那个 OCI 版本标签（也就是 `docker inspect` 能看到的那一个）也必须等于期望版本。
+#
+# 为什么要单独验它 —— 它和上面那条**不是**同一件事：
+# `docker inspect` 读的是**镜像 config 里的 LABEL**，而 LABEL 有两个来源且会打架：
+#   ① Dockerfile 里的 `LABEL org.opencontainers.image.version=${APP_VERSION}`；
+#   ② CI 交给 buildx 的 `--label`（由 metadata-action 的标签集推导）。
+# **命令行的 `--label` 会盖住 Dockerfile 的同名 LABEL。**
+# 红队审查实测出：build 作业的 metadata-action 原先没写 `tags:`，默认规则里的
+# `type=ref,event=branch` 会推出分支名 `main` ⇒ 这个标签实际是 `main` 而不是版本号，
+# 而 README 明确承诺「`docker inspect` 能看到版本号」。这是**静默错误**：
+# 没有断言盯着它，CI 会一直绿。这条断言就是为了把"承诺"变成"被强制检查的事实"。
+#
+# EXPECT_VERSION 为空时不重复报错 —— 上面那条断言在 CI 里已经会红，没必要用两条报同一件事。
+if [ -n "$EXPECT_VERSION" ]; then
+  IMG_LABEL="$(docker image inspect \
+    --format '{{ if .Config.Labels }}{{ index .Config.Labels "org.opencontainers.image.version" }}{{ end }}' \
+    "$IMAGE" 2>/dev/null || echo '')"
+  if [ "$IMG_LABEL" = "$EXPECT_VERSION" ]; then
+    pass "镜像 OCI 版本标签与本次期望版本一致（${EXPECT_VERSION}）"
+  else
+    fail "镜像 OCI 版本标签=「${IMG_LABEL:-（空）}」≠ 本次期望版本=${EXPECT_VERSION} —— docker inspect 看到的版本是错的。常见原因：metadata-action 由默认 tags 推出了分支名（如 main），并以 --label 盖掉了 Dockerfile 里的 LABEL（命令行 --label 优先）"
+  fi
 fi
 
 echo "  容器仍在运行        : ${RUNNING}"
@@ -511,6 +539,7 @@ if [ "$FAILS" -eq 0 ]; then
     echo "- 策略：保存与回读 + 越界优先级 / 未知键 / 关闭安全阀 均须 422"
     echo "- **管理台不得能提交任务**（\`POST /api/admin/tasks\` 与 \`GET /tasks/new\` 都必须不存在）"
     echo "- **版本号注入生效**：容器 \`/healthz\` 自报的 version 逐字等于本次提交应有的版本号"
+    echo "- **镜像 OCI 版本标签正确**：\`docker inspect\` 读到的 \`org.opencontainers.image.version\` 也等于该版本"
   } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
   exit 0
 else

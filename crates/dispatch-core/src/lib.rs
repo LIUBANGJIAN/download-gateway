@@ -49,17 +49,22 @@ mod tests {
         }
     }
 
-    /// 注入链取证：CI 注入 `APP_VERSION` 时必须逐字生效；未注入时退回清单版本。
-    /// 配合「`APP_VERSION=0.1.7` 下重编」的两次运行，证明注入真的进了二进制。
-    #[test]
-    fn version_follows_injected_env() {
-        match option_env!("APP_VERSION") {
-            Some(v) => assert_eq!(VERSION, v, "注入 APP_VERSION={v} 后 VERSION 应逐字相等"),
-            None => assert_eq!(
-                VERSION,
-                env!("CARGO_PKG_VERSION"),
-                "未注入时应退回 CARGO_PKG_VERSION"
-            ),
-        }
-    }
+    // ⚠️ 这里**刻意没有** `version_follows_injected_env` 这条测试 —— 曾经有过，后来删掉了。
+    //
+    // 它长这样：
+    //     match option_env!("APP_VERSION") {
+    //         Some(v) => assert_eq!(VERSION, v),
+    //         None    => assert_eq!(VERSION, env!("CARGO_PKG_VERSION")),
+    //     }
+    // 而 `VERSION` 的定义就是**同一个** `match option_env!("APP_VERSION")` ——
+    // 两侧同源 ⇒ **恒真**，永远不可能失败（实测 `APP_VERSION=garbage` 下它照样 ok）。
+    // 它看起来像"覆盖了注入链"，实际覆盖为零，**比没有测试更糟**：
+    // 会让人以为这条链已经有单测守着，从而放松端到端的验证。
+    //
+    // 结论：注入链**无法**在单测层证伪 —— 单测层只能断言"值的形态"（见上面那条 X.Y.Z）。
+    // 它真正的守卫在端到端：CI 冒烟断言「容器 `/healthz` 自报版本 == 本次应有版本」。
+    //
+    // 想在本机复现"这条链断了会怎样"，用这个反证（它会失败，且失败信息里会打印实际值）：
+    //     APP_VERSION=garbage cargo test -p dispatch-core --lib version_is_three_numeric_parts
+    //     ⇒ assertion failed: 版本号应为三段 X.Y.Z，实际 = garbage
 }
