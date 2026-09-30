@@ -375,11 +375,14 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
             # ⚠️ `format=short` 必须**显式写出来**，不能靠默认值。
-            # 下游 smoke 作业要把「本次这次构建的镜像」按这个 tag 精确拉回来，
-            # 它自己用 `${GITHUB_SHA:0:7}` 拼同样的名字 —— 两侧一旦对不上，
-            # 拉取就会失败并**静默回退成「本地重新构建」**，
-            # 于是「验的是本次产物」这个前提悄悄变成「验的是本地新造的」。
-            # 显式钉住，让这个耦合点至少是明文的。
+            # 下游 smoke 作业按 `${GITHUB_SHA:0:7}` 拼出同一个 tag，用来精确拉取本次产物。
+            # 两个"7"是**隐式耦合**：它们之所以相等，只因为两侧都**没有**设
+            # `DOCKER_METADATA_SHORT_SHA_LENGTH`（metadata-action 的短 SHA 默认长度恰为 7，
+            # 且 push 事件下 `GITHUB_SHA` 就是本次提交 SHA，小写十六进制）。
+            # 若有人把这个变量设成别的值（比如 12），tag 就会漂移，表现是：smoke 拉取失败 →
+            # 回退成本地重建。**关键不是"静默"** —— 回退会打 `::warning`，但**红绿结果不变**：
+            # 脚本照跑照绿。所以真正要防的失守是「**验的对象被悄悄换掉了，而 CI 仍然是绿的**」。
+            # 显式写出来，至少让这个耦合点是明文的。
             type=sha,prefix=sha-,format=short
       # 自检：digest 集合必须**恰好两个**。少一个就会合出残缺 manifest，
       # 多一个说明矩阵被改过而这里没同步 —— 两种都该立刻停下。

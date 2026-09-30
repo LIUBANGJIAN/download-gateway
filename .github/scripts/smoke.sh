@@ -215,10 +215,18 @@ resp="$(curl -s --max-time 10 -c "$COOKIE_JAR" -w '\n%{http_code}' \
 code="$(printf '%s' "$resp" | tail -1)"
 payload="$(printf '%s' "$resp" | sed '$d')"
 expect "POST ${ADM}/api/admin/login（注入的确定性口令）" 200 "$code" "$payload"
-if grep -qi 'gw_admin_sid' "$COOKIE_JAR" 2>/dev/null || grep -q 'sid' "$COOKIE_JAR" 2>/dev/null; then
-  pass "登录下发了会话 Cookie"
+# Cookie 名必须**恰好**是 `sid`（`admin/session.rs:21` 的 `COOKIE_NAME`）。
+# ⚠️ 这里有两层坑，都是实测/审计踩出来的：
+#   ① 最早写成 `grep -qi 'gw_admin_sid'` —— 那个名字在源码里**根本不存在**，
+#      是个**永不命中的死分支**：看着像在验 cookie 名，实际全靠后面的 `||` 兜着。
+#      比"没测"更糟的是"看着像测了"。
+#   ② 兜底的 `grep -q 'sid'` 也太松：cookie jar 是 Netscape 格式的多列文本，
+#      域名列、注释行都可能含 "sid"，等于几乎恒真。
+# 改为按**列**比对：Netscape cookie jar 的第 6 列就是 cookie 名。
+if awk -F'\t' '$6=="sid"' "$COOKIE_JAR" 2>/dev/null | grep -q .; then
+  pass "登录下发了会话 Cookie（名称恰为 sid）"
 else
-  fail "登录未下发会话 Cookie；cookie jar 内容：$(head -c 200 "$COOKIE_JAR" 2>/dev/null)"
+  fail "登录未下发会话 Cookie（期望名称 sid）；cookie jar 内容：$(head -c 200 "$COOKIE_JAR" 2>/dev/null)"
 fi
 
 # 错误口令必须被拒（证明口令校验真的在跑，而不是"配了什么都能进"）
