@@ -356,6 +356,23 @@ jobs:
           # `docker inspect` 看到的是 `main`，而 README 承诺的是版本号。
           # 更糟的是：CI 对这一点**没有任何断言**，所以它会一直绿着。
           #
+          # —— 以上不是推理，是**实测**（2026-09-30）。同一仓库三个 tag 的镜像 config 里
+          # `org.opencontainers.image.version` 的实际取值：
+          #     v0.1.0（tag push，修复前）  = `v0.1.0`   ← tag 名
+          #     v0.1.1（main push，修复前） = `main`     ← 分支名，缺陷实锤
+          #     v0.1.2（main push，修复后） = `0.1.2`    ← 修复生效
+          # 复核办法（无需 docker、无需 token，直接问 registry）：
+          #   取匿名 token → 拉 index manifest → 取平台 manifest → 拉 config blob
+          #   → 读 `.config.Labels["org.opencontainers.image.version"]`
+          # 权威实现的出处：metadata-action 的 `src/tag.ts` 里 `Transform()` 的兜底 ——
+          #   `if (r.length == 0) { r = [type=schedule, type=ref,event=branch, tag, pr] }`
+          #   ⚠️ 它**不在** `src/meta.ts` 里；且源码写成 `` `type=ref,event=${Ref.Branch}` ``，
+          #   用字面量 `grep "type=ref,event=branch"` 会 0 命中 —— **别据此断言"不存在"**。
+          # buildx 侧的落点：buildkit `frontend/dockerfile/dockerfile2llb/convert.go` 的
+          #   `finalizeResultImage()`：`maps.Copy(target.image.Config.Labels, dctx.opt.Labels)`
+          #   —— 命令行 `--label` 覆盖 Dockerfile `LABEL`，且发生在收尾阶段，**永远赢**；
+          #   build-push-action 侧就是 `args.push('--label', label)`。
+          #
           # 修法刻意选「根上不产生冲突」，而不是「用自定义 label 覆盖默认 label」——
           # 后者依赖 label 的先后顺序（谁覆盖谁取决于 metadata-action 内部顺序，
           # 且 buildx 取最后一个），本机无法验证，属于脆弱假设。
