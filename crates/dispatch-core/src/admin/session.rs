@@ -263,7 +263,11 @@ mod tests {
             public_cors: false,
             admin_cookie_secure: "auto",
         };
-        AdminState::new(store, 0, policy, env, None)
+        // 测试用固定主密钥：与生产无关，只为把 AdminState 构造完整。
+        let secrets = std::sync::Arc::new(crate::secret::SecretBox::with_key(
+            "unit-test-secret-key-0123456789",
+        ));
+        AdminState::new(store, 0, policy, env, secrets, None)
     }
 
     #[test]

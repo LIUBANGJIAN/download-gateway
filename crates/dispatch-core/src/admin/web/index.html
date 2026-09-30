@@ -7,22 +7,23 @@
   <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
-  <!-- 启动横幅：T03–T07 未落地，务必让用户一眼看到「任务只是被受理，并未真正下载」 -->
+  <!-- 启动横幅：调度内核未落地，务必让用户一眼看到「任务只是被受理，并未真正下载」 -->
   <div id="banner" class="banner" role="status">
-    ⚠️ 本轮仅受理任务，调度/下发未启用 —— 任务停在 queued，不会真正下载。
+    本轮仅受理任务，调度 / 下发尚未启用 —— 任务停在排队状态，不会真正下载。
   </div>
 
   <header class="topbar">
     <span class="brand">下载网关 · 管理台</span>
     <nav class="nav">
       <button class="nav-btn" data-view="overview">总览</button>
+      <button class="nav-btn" data-view="nodes">节点</button>
       <button class="nav-btn" data-view="tasks">任务</button>
-      <button class="nav-btn" data-view="new">添加</button>
+      <button class="nav-btn" data-view="settings">设置</button>
       <button class="nav-btn" id="logout-btn">退出</button>
     </nav>
   </header>
 
-  <!-- 登录屏 -->
+  <!-- ============ 登录 ============ -->
   <section id="view-login" class="view">
     <div class="card login-card">
       <h2>登录</h2>
@@ -36,55 +37,206 @@
     </div>
   </section>
 
-  <!-- 总览屏 -->
+  <!-- ============ 总览 ============ -->
   <section id="view-overview" class="view" hidden>
     <h2>总览</h2>
     <div id="overview-grid" class="grid"></div>
+    <h3>任务状态分布</h3>
     <div id="overview-counts" class="counts"></div>
+    <div id="overview-error" class="error-bar" hidden></div>
   </section>
 
-  <!-- 任务屏 -->
-  <section id="view-tasks" class="view" hidden>
-    <h2>任务</h2>
-    <div class="toolbar">
-      <input id="task-search" type="search" placeholder="按 URL / 名称搜索…" />
-      <button id="task-refresh">刷新</button>
+  <!-- ============ 节点 ============ -->
+  <section id="view-nodes" class="view" hidden>
+    <div class="view-head">
+      <h2>节点</h2>
+      <div class="view-actions">
+        <button id="node-refresh">刷新</button>
+        <button id="node-new" class="primary">新增节点</button>
+      </div>
     </div>
-    <div id="task-error" class="error-bar" hidden></div>
-    <table class="table">
-      <thead>
-        <tr><th>状态</th><th>名称</th><th>类型</th><th>进度</th><th>创建时间</th><th>操作</th></tr>
-      </thead>
-      <tbody id="task-rows"></tbody>
-    </table>
-    <div id="task-empty" class="empty" hidden>暂无任务</div>
+    <p class="hint">
+      「调度开关」控制是否向该节点<b>派发新任务</b>，关闭它<b>不会</b>影响节点上正在运行的下载程序。
+      「在线」是实时探测结果，与开关状态<b>相互独立</b>：一台机器可以「已关闭但在线」，也可以「已启用但离线」。
+      探测超时 1.5 秒，离线节点会让本页稍慢。
+    </p>
+    <div id="node-error" class="error-bar" hidden></div>
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>别名</th><th>地址</th><th>状态</th><th>账号</th><th>密码</th>
+            <th>角色</th><th>权重</th><th>并发</th><th>限速</th><th>派发</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="node-rows"></tbody>
+      </table>
+    </div>
+    <div id="node-empty" class="empty" hidden>暂无节点。点右上角「新增节点」把第一台下载机接进来。</div>
   </section>
 
-  <!-- 添加屏 -->
-  <section id="view-new" class="view" hidden>
-    <h2>添加任务</h2>
-    <div class="card">
-      <form id="create-form">
-        <label>链接（http/ftp/magnet/.torrent）
-          <textarea id="create-url" rows="3" required></textarea>
+  <!-- ============ 任务 ============ -->
+  <section id="view-tasks" class="view" hidden>
+    <div class="view-head">
+      <h2>任务</h2>
+      <div class="view-actions">
+        <input id="task-search" type="search" placeholder="按 URL / 名称搜索…" />
+        <button id="task-refresh">刷新</button>
+      </div>
+    </div>
+    <p class="hint">
+      本页只用于<b>查看</b>与<b>干预</b>（暂停 / 恢复 / 重试 / 删除）。
+      提交新任务的唯一入口是对外协议口 —— 用你的浏览器插件或 aria2 客户端往网关的
+      <code>:6800</code> 推送；管理台<b>不提供</b>添加任务。
+    </p>
+    <div id="task-error" class="error-bar" hidden></div>
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr><th>状态</th><th>名称</th><th>类型</th><th>进度</th><th>创建时间</th><th>操作</th></tr>
+        </thead>
+        <tbody id="task-rows"></tbody>
+      </table>
+    </div>
+    <div id="task-empty" class="empty" hidden>暂无任务。任务请通过对外的 aria2 / BitComet 协议口提交。</div>
+  </section>
+
+  <!-- ============ 设置 ============ -->
+  <section id="view-settings" class="view" hidden>
+    <div class="view-head">
+      <h2>设置 · 派发策略</h2>
+      <div class="view-actions">
+        <button id="policy-refresh">重新加载</button>
+        <button id="policy-save" class="primary">保存</button>
+      </div>
+    </div>
+    <div id="policy-note" class="notice"></div>
+    <div id="policy-error" class="error-bar" hidden></div>
+    <div id="policy-ok" class="ok-bar" hidden></div>
+    <p class="hint">
+      拖动行首的把手可调整<b>优先级</b>（越靠上越优先）。带
+      <span class="lock-tag">不可关闭</span> 标记的是容量安全阀，关掉会把节点压垮，因此禁止关闭。
+    </p>
+    <div class="table-scroll">
+      <table class="table" id="policy-table">
+        <thead>
+          <tr>
+            <th class="drag-col" aria-label="拖动"></th>
+            <th>策略</th><th>作用</th><th>分组</th><th class="prio-col">优先级</th><th>开关</th><th>生效</th>
+          </tr>
+        </thead>
+        <tbody id="policy-rows"></tbody>
+      </table>
+    </div>
+
+    <details id="env-box" class="env-box">
+      <summary>运行环境（只读）</summary>
+      <p class="hint">
+        这些是网关启动时的有效配置，<b>只读</b>，改动需重启容器。密钥类字段只显示「是否已配置」。
+      </p>
+      <div class="table-scroll">
+        <table class="table">
+          <thead><tr><th>变量</th><th>值</th><th>风险</th><th>说明</th></tr></thead>
+          <tbody id="env-rows"></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============ 新增 / 编辑节点 ============ -->
+  <dialog id="node-dialog">
+    <form id="node-form">
+      <h3 id="node-dialog-title">新增节点</h3>
+      <div class="form-grid">
+        <label>别名（唯一，用于人识别）
+          <input id="nf-alias" type="text" maxlength="64" required placeholder="例如：客厅 NAS" />
         </label>
-        <label>类型
-          <select id="create-kind">
-            <option value="http">http</option>
-            <option value="bt">bt</option>
-            <option value="magnet">magnet</option>
-            <option value="torrent">torrent</option>
+        <label>地址
+          <input id="nf-base-url" type="text" required placeholder="例如：http://203.0.113.10:9085" />
+        </label>
+        <label>账号
+          <input id="nf-user" type="text" placeholder="admin" />
+        </label>
+        <label>密码
+          <span class="pw-wrap">
+            <input id="nf-password" type="password" placeholder="新增必填；编辑时留空 = 不修改" />
+            <button type="button" id="nf-eye" class="icon-btn" title="显示当前密码">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path d="M1.5 12s4-7 10.5-7 10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12Z"
+                      fill="none" stroke="currentColor" stroke-width="1.6" />
+                <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6" />
+              </svg>
+            </button>
+          </span>
+        </label>
+        <label>角色
+          <select id="nf-role">
+            <option value="generic">generic（通用）</option>
+            <option value="series">series（剧集机）</option>
+            <option value="netdisk">netdisk（网盘机）</option>
           </select>
         </label>
-        <label>文件名（可选）
-          <input id="create-filename" type="text" />
+        <label>权重（≥ 0，越大分到越多任务）
+          <input id="nf-weight" type="number" step="0.1" min="0" value="1" />
         </label>
-        <button type="submit" class="primary">受理任务</button>
-      </form>
-      <div id="create-result" class="ok-bar" hidden></div>
-      <div id="create-error" class="error-bar" hidden></div>
-    </div>
-  </section>
+        <label>单机并发上限（1–1024）
+          <input id="nf-max-concurrent" type="number" min="1" max="1024" value="3" />
+        </label>
+        <label>限速（KB/s，0 = 不限）
+          <input id="nf-max-rate" type="number" min="0" value="0" />
+        </label>
+        <label>标签（逗号分隔，可空）
+          <input id="nf-tags" type="text" />
+        </label>
+        <label class="inline">
+          <input id="nf-enabled" type="checkbox" checked /> 纳入调度（派发开关）
+        </label>
+      </div>
+      <div id="node-form-error" class="error-bar" hidden></div>
+      <div class="dialog-actions">
+        <button type="button" id="nf-cancel">取消</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ============ 删除任务确认 ============ -->
+  <dialog id="taskdel-dialog">
+    <form id="taskdel-form">
+      <h3>删除任务</h3>
+      <p id="taskdel-name" class="strong"></p>
+      <label class="inline">
+        <input id="taskdel-files" type="checkbox" />
+        同时删除该任务在<b>下载节点上的文件</b>
+      </label>
+      <p class="hint">
+        不勾选时<b>只删除网关侧的任务记录</b>，节点上的文件保持原样 —— 这是默认行为，也是最安全的。
+        勾选后网关会向节点下发删除；当前调度内核尚未落地，因此若节点侧没有文件记录，网关会<b>明确报错</b>而不是假装成功。
+      </p>
+      <div id="taskdel-error" class="error-bar" hidden></div>
+      <div class="dialog-actions">
+        <button type="button" id="taskdel-cancel">取消</button>
+        <button type="submit" class="danger">确认删除</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ============ 删除节点确认 ============ -->
+  <dialog id="nodedel-dialog">
+    <form id="nodedel-form">
+      <h3>删除节点</h3>
+      <p>即将删除节点 <span id="nodedel-alias" class="strong"></span>。</p>
+      <p class="hint">它上面的任务归属、组绑定会一并失去关联。此操作不可撤销。</p>
+      <label>请输入节点别名以确认
+        <input id="nodedel-confirm" type="text" autocomplete="off" />
+      </label>
+      <div id="nodedel-error" class="error-bar" hidden></div>
+      <div class="dialog-actions">
+        <button type="button" id="nodedel-cancel">取消</button>
+        <button type="submit" class="danger">确认删除</button>
+      </div>
+    </form>
+  </dialog>
 
   <script type="module" src="/app.js"></script>
 </body>

@@ -125,6 +125,21 @@ async fn main() -> Result<()> {
     let store = Store::from_connection(conn);
     let now = dispatch_core::ids::now_secs();
 
+    // ── 节点密码主密钥 ───────────────────────────────────────────────────
+    // 取值顺序：DISPATCH_SECRET_KEY → <库目录>/node-secret.key → 生成并落盘。
+    // 生成的密钥**必须**落在持久化卷里，否则重启后已存节点的密码再也回看不了。
+    let (secrets, key_generated) = dispatch_core::secret::SecretBox::resolve(&cfg.db_path)
+        .context("初始化节点密码主密钥失败")?;
+    if key_generated {
+        tracing::warn!(
+            file = %dispatch_core::secret::key_file_path(&cfg.db_path).display(),
+            "DISPATCH_SECRET_KEY 未设置：已生成节点密码主密钥并落盘。\
+             该文件与数据库同等重要 —— 丢了就再也回看不了已保存的节点密码（需重新填写）。\
+             容器部署请确认它位于持久化卷内。"
+        );
+    }
+    let secrets = Arc::new(secrets);
+
     // ── 两端口状态 ───────────────────────────────────────────────────────
     let handshake = HandshakeState {
         proxy_client_id: resolve_proxy_client_id(),
@@ -152,7 +167,14 @@ async fn main() -> Result<()> {
         public_cors: cfg.public_cors,
         admin_cookie_secure: admin_policy.cookie_secure.as_str(),
     };
-    let admin_state = AdminState::new(store.clone(), now, admin_policy, env, cfg.web_dir.clone());
+    let admin_state = AdminState::new(
+        store.clone(),
+        now,
+        admin_policy,
+        env,
+        secrets,
+        cfg.web_dir.clone(),
+    );
 
     // ── 组装（业务路由来自 dispatch-core；/healthz 仍由 main 拥有）─────────
     let public_app = dispatch_core::ingress::router()

@@ -11,6 +11,7 @@
 //! | [`tasks`] | 任务域：**★唯一入库入口 `create_task`** + 读路径 + 行解码 + 状态映射 |
 //! | [`ingress`] | 对外口（6800）：Aria2 兼容面 + BitComet 兼容面 + 自签三段式握手 |
 //! | [`admin`] | 管理口（8080）：会话 + REST + 内嵌零构建 Web 管理台 |
+//! | [`secret`] | 节点密码的可逆封装（管理台「眼睛」回看原文；复用 `bitcomet-api::rncryptor`） |
 //!
 //! 后续任务会继续追加：`scheduler`（T04）、`sync`（T06）、`dedup`（T07）、`naming`（T13）。
 
@@ -18,6 +19,7 @@ pub mod admin;
 pub mod health;
 pub mod ids;
 pub mod ingress;
+pub mod secret;
 pub mod state;
 pub mod store;
 pub mod tasks;

@@ -11,9 +11,10 @@ BitComet 下载任务代理分发网关：软件把下载任务推送到代理�
 | 项 | 状态 |
 |---|---|
 | 设计 | 已闭合（14 表 / 17 显式索引 / 双端口 / 五级去重 / C1–C6 硬约束） |
-| 实现 | **T01 工程骨架** ✅ · **T02 BitComet 客户端** ✅（三台真节点已验收） · **T08 Aria2 兼容面** ✅ · **T09 BitComet 兼容面 + 自签三段式握手** ✅ · **T05（入库侧）任务建立 / read-after-write / 状态机** ✅ · **T10（后端 + 内嵌台）管理 API / 会话 / Web 管理台** ✅ |
+| 实现 | **T01 工程骨架** ✅ · **T02 BitComet 客户端** ✅（三台真节点已验收） · **T08 Aria2 兼容面** ✅ · **T09 BitComet 兼容面 + 自签三段式握手** ✅ · **T05（入库侧）任务建立 / read-after-write / 状态机** ✅ · **T10（后端 + 内嵌台）管理 API / 会话 / Web 管理台** ✅ · **T11 管理台纠偏 + 下载节点管理 + 派发策略页** ✅ |
 | 未实现 | **T03–T07**：节点健康检查、调度器选点、真正下发、轮询同步、去重 ⇒ **任务只会入库排队，不会真正下载**（启动日志有 `WARN` 明示） |
 | CI/CD | ✅ 双架构镜像已在 Docker Hub：`liubangjian/download-gateway` 的 `latest` 与 `sha-<短SHA>` 均含 linux/amd64 + linux/arm64 |
+| CI 验证深度 | 脱敏闸门 → 质量门（fmt / clippy / test）→ 原生矩阵构建 → 多架构 manifest → **容器冒烟**（把刚构建的镜像**真跑起来**逐个打接口） |
 | 部署 | ✅ `docker-compose.yml`（本仓库） |
 
 > ⚠️ **「入库」是当前链路真正的终点。** 两个端口都已按 `02 §4` 的契约对外服务
@@ -96,8 +97,15 @@ curl -fsS http://127.0.0.1:6800/jsonrpc -H 'Content-Type: application/json' \
 
 ```bash
 # 3a. 没握手就打业务接口 → 必须 401（这是门禁在工作的证据，不是故障）
+#     ⚠️ **前提：必须设了 `DISPATCH_PUBLIC_TOKEN`。** 没设的话判定表第 5/6 行是「一律放行」，
+#        这里会返回 200 —— 那是设计如此（默认不校验），不是门禁坏了。
+#        BitComet 面**全部 7 条业务路由**共用同一个 `deny_if_unauthorized`，口径一致。
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:6800/api/task/http/add
 # → 401  响应体 {"error_code":"INVALID_TOKEN",...,"platform":"proxy"}
+# 设了令牌之后，带上正确的 Bearer 才放行：
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer <令牌>" \
+  http://127.0.0.1:6800/api/config/about/get
+# → 200  响应体 {"error_code":"OK",...,"platform":"proxy"}
 
 # 3b. 握手第一步不需要凭据
 curl -fsS -X POST http://127.0.0.1:6800/api/webui/ip_verify
@@ -115,12 +123,71 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/
 # → 200（Web 管理台首页；未登录会跳登录页）
 ```
 
+**管理台有五个页面**：总览 / 节点 / 任务 / 设置 / 退出。
+
+| 页面 | 能做什么 |
+|---|---|
+| 总览 | 看运行环境快照（调度内核是否启用、节点数、任务状态分布） |
+| 节点 | 下载节点的**增 / 删 / 改**、**派发开关**、**在线/离线**实时探测、**密码回看** |
+| 任务 | **只看与干预**：查看当前任务、暂停 / 恢复 / 重试 / 删除（可选是否连带删节点文件） |
+| 设置 | 12 条派发 / 负载策略的**逐条开关**与**拖动排序**（行序即优先级）。⚠️ 现在只是**把策略配下来**——调度内核（T03–T07）还没落地，改了**不会**影响任何实际行为 |
+
+### ⚠️ 职责边界：管理台**永不提供「添加任务」**
+
+这是本项目的**产品原则**，不是「还没做」：
+
+| 入口 | 职责 |
+|---|---|
+| 对外口 `:6800`（Aria2 JSON-RPC / BitComet WebUI） | **唯一**的任务提交入口 |
+| 管理台 `:8080` | 只管**看**（任务/节点状态）与**管**（节点增删改启停、任务干预、策略） |
+
+理由有三条，最硬的一条是：管理台一旦也能提交任务，同一条链路上就出现了**两个来源**，
+而来源会渗进去重、优先级、审计与调度公平性里 —— 那是后患，不是便利。
+代码里为此**已经删掉** `POST /api/admin/tasks` 与前端「添加任务」页，CI 冒烟会在
+这两处各打一枪（断言 404/405），防止它悄悄长回来。
+
 > 🔒 **跨端口隔离**：对外口打管理路由、管理口打对外路由，都必须是 **404**。
 > 两个 app 的路由表在源码里是分别构造的，不存在"从 6800 摸到管理后台"。
 > ```bash
 > curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:6800/api/admin/tasks   # → 404
 > curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8080/jsonrpc           # → 404
 > ```
+
+### 5) 管理口 · 节点与策略接口速查
+
+```bash
+# 登录拿会话（下面用 -b jar 带上）
+curl -sS -c jar -H 'Content-Type: application/json' \
+  -d '{"password":"<DISPATCH_ADMIN_PASSWORD>"}' http://127.0.0.1:8080/api/admin/login
+
+# 节点列表（?probe=0 可跳过在线探测，本地排查时更快）
+curl -sS -b jar 'http://127.0.0.1:8080/api/admin/nodes?probe=0'
+# → {"code":0,"data":{"items":[{...,"password_set":true,"online":false,"http_code":null,"probe_error":"..."}]}}
+#   响应里**永远没有密文字段**（pass_enc 不外泄），只有 password_set 这个布尔。
+
+# 新增节点（max_rate_kbps 是界面单位 KB/s，后端按 ×1024 折算成字节/秒存储；0 = 不限速）
+curl -sS -b jar -H 'Content-Type: application/json' \
+  -d '{"alias":"节点A","base_url":"http://198.51.100.10:9085","user":"ops","password":"<节点口令>","role":"generic","max_rate_kbps":512}' \
+  http://127.0.0.1:8080/api/admin/nodes
+
+# 派发开关（独立端点，只改 enabled 这一个字段，不会碰其它值）
+curl -sS -b jar -H 'Content-Type: application/json' -d '{"enabled":false}' \
+  http://127.0.0.1:8080/api/admin/nodes/1/enabled
+
+# 密码回看（用 POST：口令不进 URL / 不进访问日志；响应带 Cache-Control: no-store）
+curl -sS -b jar -X POST -H 'Content-Type: application/json' -d '{}' \
+  http://127.0.0.1:8080/api/admin/nodes/1/secret
+
+# 策略：读全量 + 环境快照
+curl -sS -b jar http://127.0.0.1:8080/api/admin/config
+# 保存（只提交你要改的键；越界优先级 / 未知键 / 关闭安全阀都会 422，不会静默夹取）
+curl -sS -b jar -X PUT -H 'Content-Type: application/json' \
+  -d '{"policies":[{"key":"least_tasks","enabled":false,"priority":300}]}' \
+  http://127.0.0.1:8080/api/admin/config
+```
+
+写接口（POST / PUT / DELETE）除了会话，还需要通过 CSRF 校验；
+`curl` 脚本运维属于"两者皆缺"的情形，按 `07 §5.1` 的**刻意偏离**放行（见文末「已知偏差」第 2 条）。
 
 ## 部署（Docker Compose）
 
@@ -195,6 +262,7 @@ IMAGE_TAG=sha-eb6a12c docker compose up -d       # 或写进同目录的 .env
 | `DISPATCH_ADMIN_COOKIE_SECURE` | `auto` | 会话 Cookie 的 `Secure` 属性，取值 `auto` / `always` / `never`。`auto` ＝ **仅**在请求带 `X-Forwarded-Proto: https` 时加 `Secure`。这是对设计 `07 §5.1`「非 127.0.0.1 即加 Secure」的**刻意偏离**：按原文，在 `http://<局域网IP>:端口` 这种明文形态下浏览器**不会**回传该 cookie ⇒ 登录成功即丢会话 ⇒ 死循环。真正的解法是给管理口配 TLS 反代，然后设 `always` |
 | `DISPATCH_WEB_DIR` | 未设＝用**编进二进制的内嵌页面** | 指向磁盘目录以覆盖内嵌页面（改完刷新即生效，不用重编译）。需配合把宿主目录挂进容器 |
 | `DISPATCH_ALLOW_FILE_DELETE` | `false` | 是否允许"连节点上的文件一起删"。默认关：删磁盘文件**不可逆**，且节点侧删除能力（T05）尚未落地，现在放开等于让一个没接通的开关可被误触 |
+| `DISPATCH_SECRET_KEY` | 未设＝读/写 `<库目录>/node-secret.key`（不存在则**自动生成** 32 字节随机并落盘） | 节点口令的**可逆加密主密钥**。管理台的节点列表要支持「点眼睛看密码」，所以节点口令必须**可解密回明文**——只能加密不能解密是做不到这个功能的。链路复用 BitComet 客户端的 RNCryptor v3 实现（PBKDF2-HMAC-SHA1×10000 → AES-256-CBC → HMAC-SHA256），**没有引入新的加密 crate**。⚠️ 容器部署时那个密钥文件必须落在**持久化卷**里：它一旦丢失，已存的节点口令就再也解不开（启动日志在自动生成时会打 `WARN`）。多实例/重建容器想沿用同一把钥匙，就把这个变量显式设上 |
 
 缺失或**全空白**的变量一律回落默认值（`env_or` 把空白也当未设置）；布尔量接受 `1/true/yes/on` 与 `0/false/no/off`（大小写不敏感，无法识别时回落默认）。
 
@@ -211,14 +279,20 @@ src/
 crates/
   dispatch-core/        核心库：
     src/state.rs          PublicState / AdminState（共享句柄）
+    src/secret.rs         节点口令的可逆加密盒（RNCryptor v3；管理台「眼睛」的后端）
     src/tasks/            任务建立 / 查询 / 状态映射（唯一入库入口）
     src/ingress/          对外口 6800：Aria2 兼容面、BitComet 兼容面、自签三段式握手
     src/admin/            管理口 8080：REST + 会话 + 内嵌 Web 管理台
+      rest.rs             任务列表 / 任务干预（**刻意没有「添加任务」**）
+      nodes.rs            下载节点 CRUD / 派发开关 / 密码回看 / 在线探测
+      policy.rs           12 条派发与负载策略的读写（存 app_config KV，只存差异）
+      web/                内嵌管理台（index.html / app.js / app.css）
   bitcomet-api/         BitComet WebUI API 客户端（RNCryptor v3 三段式）
 migrations/
   V1__init.sql          14 表 / 17 索引
-.github/workflows/
-  ci.yml                脱敏闸门 → 质量门 → 原生矩阵 → 多架构 manifest
+.github/
+  workflows/ci.yml      脱敏闸门 → 质量门 → 原生矩阵 → 多架构 manifest → 容器冒烟
+  scripts/smoke.sh      容器冒烟：把刚构建的镜像真跑起来，逐面打接口
 Dockerfile              多阶段（Rust 构建 + 瘦运行镜像，非 root uid 10001）
 docker-compose.yml      部署用 Compose（命名卷 / 管理口只绑回环 / stop_signal: SIGINT）
 ```
@@ -283,6 +357,18 @@ docker-compose.yml      部署用 Compose（命名卷 / 管理口只绑回环 / 
 6. **`tellStopped` 的终态集合目前是 `{completed, failed, removed}`。**
    将来 T03/T06 引入 `orphaned` / `missing_on_node` / `deduplicated`（分别映射到 Aria2 的 `error` / `removed`）时，
    **必须同步补进终态集合**，否则 `tellStopped` 会静默漏掉这些任务。
+7. **「设置」页的策略可以配、但暂时不影响行为。** 12 条派发/负载策略的开关与优先级是**真的**存进了库
+   （`app_config` 表，key 形如 `policy.<策略键>`，代码里有完整默认表、库里只存差异），
+   接口也会真校验（未知键 / 越界优先级 / 关闭安全阀一律 422）；
+   但**调度内核尚未落地**，所以没有任何组件会去读它们来改变选点结果。
+   接口返回体里为此专门带一个 `effective` 字段与一句 `effective_note`，
+   把这个事实**写在响应里**而不是只写在文档里——免得有人在生产上"调完策略发现没变化"，
+   然后去查一个根本不存在的 bug。
+8. **节点口令必须可逆加密，这是「点眼睛看密码」换来的代价。** 哈希存口令（更安全的常规做法）
+   在这个功能下不成立。加密用的是 BitComet 客户端那套 RNCryptor v3，密钥来自
+   `DISPATCH_SECRET_KEY` 或库目录下的 `node-secret.key`。**这个文件必须进持久化卷**，
+   否则容器重建时已存口令全部解不开。接口层面只回 `password_set` 布尔，
+   密文（`pass_enc`）永不出现在任何响应里，并且回看端点会写 `security` 审计。
 
 ### 已知缺口（尚未实现）
 
@@ -303,6 +389,35 @@ cargo test --all --locked
 **这三行要与 CI 逐字一致**，尤其是 `--all-features` 和 `--locked`：
 少了前者会出现"本地绿、CI 红"；少了后者则本地会静默更新 `Cargo.lock`，
 而 CI 用的是 `--locked`（改了 `Cargo.toml` 必须同步 `Cargo.lock`）。
+
+### 容器冒烟（CI 里自动跑）
+
+`.github/scripts/smoke.sh` 会把一个**已经构建好的镜像真启动起来**，逐个面去打接口：
+
+```
+健康检查（两个端口）→ aria2 原生协议面 → BitComet 协议面（未认证必须 401）
+→ 管理口登录（含错误口令必须 401）→ 只读接口 → 节点增删改 + 密码回看 + 限速折算
+→ 策略保存与校验（越界 / 未知键 / 关闭安全阀 各打一枪 422）
+→ 【断言】管理台不得能提交任务（POST /api/admin/tasks 必须 404/405、GET /tasks/new 必须 404）
+```
+
+它存在的意义是**消灭「假绿」**：在此之前流水线只*构建*镜像、从不*运行*镜像，
+于是「ENTRYPOINT 写错」「迁移没打进镜像」「路由没挂上」这三类问题在 CI 里全是绿的，
+推上 Docker Hub 之后用户拉下来才是坏的。
+
+本地没装 Docker 也能受益：CI 每次推 `main` 都会跑。要本地跑，唯一的前提是有 Docker：
+
+```bash
+IMAGE=liubangjian/download-gateway:sha-<短SHA> bash .github/scripts/smoke.sh
+```
+
+⚠️ **`IMAGE` 必须是本次要验的那一枚**（CI 里用 `sha-<短SHA>` 按名字精确拉取），
+**不要用 `latest`**——验 `latest` 等于验上一版，那种绿毫无意义。
+拉不到时脚本会**回退成用当前源码本地重建**，并打一条 warning 说明"验的不再是发布出去的那一枚"。
+
+脚本刻意**不用 `set -e`**：要跑完全部断言再一次性汇总（告诉你到底坏了几处），
+而不是第一条失败就退出。失败时每条 `[FAIL]` 都带**实际 HTTP 状态码与响应片段**，
+末尾还有容器日志尾部，不用再去翻别的日志。
 
 ## 许可证
 

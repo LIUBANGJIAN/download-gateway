@@ -374,7 +374,13 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-
+            # ⚠️ `format=short` 必须**显式写出来**，不能靠默认值。
+            # 下游 smoke 作业要把「本次这次构建的镜像」按这个 tag 精确拉回来，
+            # 它自己用 `${GITHUB_SHA:0:7}` 拼同样的名字 —— 两侧一旦对不上，
+            # 拉取就会失败并**静默回退成「本地重新构建」**，
+            # 于是「验的是本次产物」这个前提悄悄变成「验的是本地新造的」。
+            # 显式钉住，让这个耦合点至少是明文的。
+            type=sha,prefix=sha-,format=short
       # 自检：digest 集合必须**恰好两个**。少一个就会合出残缺 manifest，
       # 多一个说明矩阵被改过而这里没同步 —— 两种都该立刻停下。
       - name: 自检 · digest 数量
@@ -407,4 +413,84 @@ jobs:
         if: failure()
         run: |
           echo "::error title=合并参数::image=${IMAGE} | version=${{ steps.meta.outputs.version }} | tags=${{ steps.meta.outputs.tags }}"
+
+  # ---------- 5) 容器冒烟：把刚构建的镜像**真跑起来** ----------
+  #
+  # 为什么非要这一层：在这之前，整条流水线只**构建**镜像、从不**运行**镜像。
+  # 于是「Dockerfile 的 ENTRYPOINT 写错了」「迁移没打进镜像」「路由没挂上」
+  # 这三类问题，在 CI 里全都是绿的 —— 镜像照样推上 Docker Hub，用户拉下来才是坏的。
+  # 这叫「假绿」：绿灯证明的是「编译过了」，不是「这东西能跑」。
+  #
+  # 本作业把镜像真启动，然后逐个面去打接口：健康检查 / aria2 原生协议面 /
+  # BitComet 原生协议面的认证门禁 / 管理口登录与只读接口 / 节点增删改与密码回看 /
+  # 策略保存与校验 / **管理台不得能提交任务**。断言明细见 `.github/scripts/smoke.sh`。
+  #
+  # 两个刻意的设计取舍：
+  #  ① **优先拉取本次发布的镜像**（`sha-<短短 sha>`），而不是本地重造、更不是 `latest`。
+  #     验 `latest` 等于验上一版，那种绿毫无意义。若拉取失败（例如本次未发布），
+  #     才回退成「用同一份源码本地构建」——结论仍指向本次提交，但会打 warning。
+  #  ② 镜像名继续走 **job 级 env**（而非 job output）：见文件开头 D-12 的教训。
+  smoke:
+    # ⚠️ 必须**显式**依赖 merge：否则冒烟可能跑在 manifest 合并之前，
+    # 去拉一个还不存在的 tag。所有 `needs` 都写全，是因为下面 job 级 `if:`
+    # 会替换掉 GitHub 隐式的 `success()` 门禁（缺陷 D-13）。
+    needs: [test, gate, build, merge]
+    if: ${{ !cancelled() && needs.test.result == 'success' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    # 兜底超时：真出问题时不想让它挂到 GitHub 默认的 6 小时。
+    timeout-minutes: 30
+    env:
+      # 优先级链与 gate / build / merge **逐字一致**（含兜底值）。
+      IMAGE: ${{ secrets.DOCKERHUB_USERNAME || vars.DOCKERHUB_USERNAME || 'namespace-unset' }}/download-gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      # 登录只为避开 Docker Hub 的**匿名拉取限流**（本仓库镜像目前是 public，
+      # 不登录也能拉）。没有凭据时不登录，拉取走匿名 —— 失败会走本地构建回退。
+      - name: 登录 Docker Hub（仅发布时需要）
+        if: needs.gate.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 解析本次镜像引用
+        id: resolve
+        env:
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+        run: |
+          set -uo pipefail
+          # 与 merge 里 `type=sha,prefix=sha-,format=short` 拼法必须一致（见那边的注释）。
+          TAG="sha-${GITHUB_SHA:0:7}"
+          if [ "${PUBLISH:-false}" = "true" ]; then
+            echo "本次应已发布镜像：${IMAGE}:${TAG}"
+            if docker pull "${IMAGE}:${TAG}"; then
+              echo "ref=${IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+              echo "mode=registry" >> "$GITHUB_OUTPUT"
+              echo "已从 registry 拉回本次构建的镜像，开始冒烟。"
+              exit 0
+            fi
+            echo "::warning title=回退本地构建::拉取 ${IMAGE}:${TAG} 失败，无法确认 registry 上的本次产物。改为用**同一份源码**本地构建镜像做冒烟 —— 结论仍指向本次提交，但验的不再是发布出去的那一枚。"
+          else
+            echo "::notice title=未配置 Docker Hub 凭据::本次没有已发布镜像可用，改为本地构建源码镜像做冒烟（不推送）。"
+          fi
+          docker build -t smoke-local:ci .
+          echo "ref=smoke-local:ci" >> "$GITHUB_OUTPUT"
+          echo "mode=local" >> "$GITHUB_OUTPUT"
+
+      - name: 容器冒烟
+        env:
+          IMAGE: ${{ steps.resolve.outputs.ref }}
+        run: bash .github/scripts/smoke.sh
+
+      # 与 build / merge 同样的诊断策略：Actions 作业日志通过 API 拉取要管理员权限，
+      # 而错误注解是公开可读的。失败时把关键取值塞进 ::error::，排障不必依赖日志。
+      - name: 失败时输出冒烟参数（诊断）
+        if: failure()
+        run: |
+          echo "::error title=冒烟参数::image=${{ steps.resolve.outputs.ref }} | mode=${{ steps.resolve.outputs.mode }} | publish=${{ needs.gate.outputs.publish }}"
+          echo "--- 容器状态 ---"
+          docker ps -a --filter name=gw-smoke --format '{{.Status}}' || true
+          echo "--- 容器日志尾部 ---"
+          docker logs gw-smoke 2>&1 | tail -80 || true
 

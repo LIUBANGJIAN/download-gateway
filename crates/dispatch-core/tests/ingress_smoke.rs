@@ -55,7 +55,10 @@ fn admin_router(store: &Store) -> Router {
         public_cors: false,
         admin_cookie_secure: "auto",
     };
-    let st = AdminState::new(store.clone(), 0, policy, env, None);
+    let secrets = std::sync::Arc::new(dispatch_core::secret::SecretBox::with_key(
+        "ingress-smoke-test-key-0123456789",
+    ));
+    let st = AdminState::new(store.clone(), 0, policy, env, secrets, None);
     dispatch_core::admin::router().with_state(st)
 }
 
@@ -113,9 +116,24 @@ async fn admin_root_is_no_longer_404_and_carries_banner() {
     let (status, body) = call(&app, req("GET", "/", Body::empty())).await;
     assert_eq!(status, StatusCode::OK, "管理台首页应 200（原 404）");
     let html = String::from_utf8(body).unwrap();
+    // ⚠️ 断言前**先剥掉所有空白**，再匹配语义片段。
+    //
+    // 起因：这条断言原先钉的是逐字文案「仅受理任务，调度/下发未启用」，
+    // 结果页面把文案改成「仅受理任务，调度 / 下发尚未启用」（斜杠两侧多了空格、
+    // 「未」改「尚未」）之后，测试就红了 —— 而横幅**并没有被删**，语义完好。
+    // 一个「因为排版加了个空格就报错」的断言是负资产：它会训练人去改测试而不是看页面。
+    //
+    // 改为断言**不变量**：横幅在不在、有没有明说「未启用」。
+    // 这样文案可以自由改写，但只要有人把横幅删了、或者把话说反了
+    // （暗示任务真的在下载），测试立刻红。
+    let compact: String = html.chars().filter(|c| !c.is_whitespace()).collect();
     assert!(
-        html.contains("仅受理任务，调度/下发未启用"),
-        "首页必须含「未启用」横幅明文"
+        compact.contains("仅受理任务"),
+        "首页必须保留「仅受理任务」横幅 —— 缺了它，用户会以为任务真的在下载"
+    );
+    assert!(
+        compact.contains("未启用"),
+        "首页横幅必须明说「调度/下发未启用」，不得暗示任务已在下载"
     );
     store.shutdown().await;
 }

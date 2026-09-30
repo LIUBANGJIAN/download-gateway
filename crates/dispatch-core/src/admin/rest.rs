@@ -1,6 +1,14 @@
-//! 管理 API handler（6 个业务端点 + login/logout）。
+//! 管理 API handler：任务的读 / 干预 + 会话（login/logout）。
 //!
 //! 统一信封 `{code, data, message}`；写操作要求会话 + CSRF；读操作仅会话。
+//!
+//! # 这里**没有**「添加任务」
+//!
+//! `POST /api/admin/tasks`（添加任务）已在本轮**删除**。原因不是"用户要求"，
+//! 而是一条产品原则：**任务提交的唯一入口是面向外部的协议面（`:6800`）**，
+//! 管理台（`:8080`）只负责「看」和「管」。详见 `design/08-增量PRD-管理台纠偏与节点管理.md` §1。
+//!
+//! 节点的增删改与策略配置分别在同级的 [`super::nodes`] / [`super::policy`] 模块。
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -18,7 +26,6 @@ use super::{
 use crate::ingress::envelope;
 use crate::state::AdminState;
 use crate::tasks::query::{self, TaskListQuery};
-use crate::tasks::{IngressOrigin, TaskCreateInput, TaskKind, create_task};
 
 /// 会话有效期（秒），也用于 `expires_in`。
 const SESSION_MAX_AGE: i64 = 1800;
@@ -28,25 +35,6 @@ const SESSION_MAX_AGE: i64 = 1800;
 pub struct LoginReq {
     /// 管理口令。
     pub password: String,
-}
-
-/// `POST /api/admin/tasks` 请求体。
-#[derive(serde::Deserialize)]
-pub struct CreateReq {
-    /// 链接。
-    pub url: String,
-    /// 任务类型（缺省按 `http`）。
-    #[serde(default)]
-    pub kind: Option<String>,
-    /// 组 id。
-    #[serde(default)]
-    pub group_id: Option<i64>,
-    /// 来源键。
-    #[serde(default)]
-    pub source_key: Option<String>,
-    /// 文件名。
-    #[serde(default)]
-    pub filename: Option<String>,
 }
 
 /// `POST /api/admin/tasks/{id}/{action}` 请求体。
@@ -216,54 +204,6 @@ pub async fn tasks_list(
     }
 }
 
-/// `POST /api/admin/tasks`。
-pub async fn tasks_create(
-    State(st): State<Arc<AdminState>>,
-    headers: axum::http::HeaderMap,
-    Json(req): Json<CreateReq>,
-) -> Response {
-    let expiry = match require_write(&st, &headers) {
-        Ok(e) => e,
-        Err(r) => return r,
-    };
-    let kind = match req.kind.as_deref().map(parse_kind) {
-        Some(k) => k,
-        None => TaskKind::Http,
-    };
-    match create_task(
-        &st.store,
-        TaskCreateInput {
-            kind,
-            url_raw: req.url,
-            url_norm: None,
-            filename: req.filename,
-            group_id: req.group_id,
-            source_key: req.source_key,
-            max_connection_count: None,
-            start_later: false,
-            save_folder_hint: None,
-            origin: IngressOrigin::Admin,
-        },
-    )
-    .await
-    {
-        Ok(c) => {
-            let mut resp = ok(json!({
-                "task_id": c.task_id,
-                "gid": c.gid,
-                "group_id": c.group_id,
-            }));
-            renew_cookie(&mut resp, &st, &headers, expiry);
-            resp
-        }
-        Err(e) => err(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            C_VALIDATION_ERROR,
-            format!("{e}"),
-        ),
-    }
-}
-
 /// `POST /api/admin/tasks/{id}/{action}`。
 pub async fn task_action(
     State(st): State<Arc<AdminState>>,
@@ -340,12 +280,23 @@ async fn run_action(st: &AdminState, id: &str, action: &str, req: &ActionReq) ->
             }
         }
         "remove" => {
+            // 用户勾了「同时删除节点上的文件」时，**必须**把能不能做说清楚，不许假装成功。
+            // 两道闸，按顺序判：
+            //   ① 网关总开关 `DISPATCH_ALLOW_FILE_DELETE` 未开 ⇒ 拒绝（这是安全边界）；
+            //   ② 开关已开，但任务在节点侧**没有文件记录**（调度内核未落地）⇒ 仍然拒绝。
+            // 第二条是诚实边界：与其「删了个寂寞还回 200」，不如明确告诉用户当前做不到。
             if req.delete_files.unwrap_or(false) {
-                // 本轮无节点 ⇒ 无节点文件 ⇒ **拒绝**删文件请求（不静默降级为「只删库」）。
+                if !st.policy.allow_file_delete {
+                    return err(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        C_VALIDATION_ERROR,
+                        "无法删除节点文件：网关未开启该能力。请在部署配置中把 DISPATCH_ALLOW_FILE_DELETE 设为 true（确认确实需要后）。",
+                    );
+                }
                 return err(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     C_VALIDATION_ERROR,
-                    "delete_files=true 被拒绝：本轮无节点文件，禁止删除文件（如需仅移除任务记录，请用 delete_files=false）",
+                    "无法删除节点文件：本任务在节点侧没有文件记录（调度/下发尚未落地）。若只想移除网关侧的任务记录，请不要勾选『同时删除节点上的文件』。",
                 );
             }
             match query::delete_task(&st.store, &row.task_id).await {
@@ -365,37 +316,15 @@ async fn run_action(st: &AdminState, id: &str, action: &str, req: &ActionReq) ->
     }
 }
 
-/// `GET /api/admin/nodes`（本轮无节点 ⇒ 诚实空数组，不含 pass/token）。
-pub async fn nodes_list(
-    State(st): State<Arc<AdminState>>,
-    headers: axum::http::HeaderMap,
-) -> Response {
-    let expiry = match require_read(&st, &headers) {
-        Ok(e) => e,
-        Err(r) => return r,
-    };
-    let mut resp = ok(json!([]));
-    renew_cookie(&mut resp, &st, &headers, expiry);
-    resp
-}
-
-/// `GET /api/admin/config`。
-pub async fn config_get(
-    State(st): State<Arc<AdminState>>,
-    headers: axum::http::HeaderMap,
-) -> Response {
-    let expiry = match require_read(&st, &headers) {
-        Ok(e) => e,
-        Err(r) => return r,
-    };
-    let mut resp = ok(json!(st.env.items()));
-    renew_cookie(&mut resp, &st, &headers, expiry);
-    resp
-}
-
 /// 读守卫：`Ok(续期后的过期时刻)` 通过（`Some` 表示有活跃会话、需重发 Cookie）；`Err` 直接返回。
+///
+/// 可见性放开到 `pub(crate)`：`admin::nodes` 与 `admin::policy` 的写/读 handler
+/// 必须用**同一套**守卫，绝不能各自实现一份 —— 两份实现迟早会漂移出安全缺口。
 #[allow(clippy::result_large_err)] // `Response` 体量较大；直接回传错误响应最清晰
-fn require_read(st: &AdminState, headers: &axum::http::HeaderMap) -> Result<Option<i64>, Response> {
+pub(crate) fn require_read(
+    st: &AdminState,
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<i64>, Response> {
     match super::session::guard_read(st, headers) {
         (super::session::Guard::Ok, exp) => Ok(exp),
         _ => Err(err(StatusCode::UNAUTHORIZED, C_UNAUTHENTICATED, "未认证")),
@@ -404,7 +333,7 @@ fn require_read(st: &AdminState, headers: &axum::http::HeaderMap) -> Result<Opti
 
 /// 写守卫：`Ok(续期后的过期时刻)` 通过；未认证 401 / 跨源 403 直接返回 `Err`。
 #[allow(clippy::result_large_err)] // 同 `require_read`
-fn require_write(
+pub(crate) fn require_write(
     st: &AdminState,
     headers: &axum::http::HeaderMap,
 ) -> Result<Option<i64>, Response> {
@@ -423,7 +352,10 @@ fn require_write(
 ///
 /// 设计 §5.1：活跃请求刷新 `last_seen_at` 的同时重发 Cookie，令浏览器端 `Max-Age` 随活动滑动。
 /// `expiry` 为守卫续期后的新过期时刻；`None`（无会话）不重发。`logout` 走清除分支、不调用此函数。
-fn renew_cookie(
+///
+/// ⚠️ **每个新 handler 都必须调用它**。漏掉的症状很隐蔽：接口能通、功能正常，
+/// 只是那个页面的会话不会随操作续期，用户静置一会儿就被踢回登录页。
+pub(crate) fn renew_cookie(
     resp: &mut Response,
     st: &AdminState,
     headers: &axum::http::HeaderMap,
@@ -439,15 +371,6 @@ fn renew_cookie(
         HeaderValue::from_str(&super::session::set_cookie_header(&sid, remaining, secure))
     {
         resp.headers_mut().insert(header::SET_COOKIE, v);
-    }
-}
-
-fn parse_kind(s: &str) -> TaskKind {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "bt" => TaskKind::Bt,
-        "magnet" => TaskKind::Magnet,
-        "torrent" => TaskKind::Torrent,
-        _ => TaskKind::Http,
     }
 }
 

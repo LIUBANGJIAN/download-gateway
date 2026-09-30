@@ -18,7 +18,11 @@ thiserror.workspace = true
 anyhow.workspace = true
 # ---- 本次增量新增 ----
 axum.workspace = true          # ingress/admin 的 Router/State/Json/Path/Query/ConnectInfo
-bitcomet-api.workspace = true   # 复用 rncryptor::decrypt + clientid::new_uuid/load_or_create_client_id
+bitcomet-api.workspace = true   # 复用 rncryptor（节点密码可逆封装）+ clientid + user_agent
+# reqwest 用于管理台「节点在线/离线」探测。**不是新引入的 crate** ——
+# 它已是 bitcomet-api 的依赖、早已在 `Cargo.lock` 里；这里只是让 dispatch-core
+# 能直接命名 `reqwest::Client` 并自建带超时的探测客户端。
+reqwest.workspace = true
 # getrandom 版本必须与 crates/bitcomet-api 一致（0.4 已把 API 改名为 `getrandom::fill`）。
 # 若误写 0.2，会因 `getrandom::getrandom` 不存在而编译失败。
 getrandom = "0.4"

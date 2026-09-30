@@ -252,6 +252,7 @@ dependencies = [
  "axum",
  "bitcomet-api",
  "getrandom 0.4.3",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

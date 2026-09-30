@@ -73,6 +73,8 @@ pub struct AdminState {
     pub guard: crate::admin::session::LoginGuard,
     /// 配置快照（`GET /api/admin/config` 的数据源）。
     pub env: Arc<EnvSnapshot>,
+    /// 节点密码的加解密器（供管理台「眼睛」回看原文）。
+    pub secrets: Arc<crate::secret::SecretBox>,
     /// `DISPATCH_WEB_DIR`；`Some` 则从磁盘读页面（热改）。
     pub web_dir: Option<PathBuf>,
 }
@@ -84,6 +86,7 @@ impl AdminState {
         started_at: i64,
         policy: Arc<AdminPolicy>,
         env: EnvSnapshot,
+        secrets: Arc<crate::secret::SecretBox>,
         web_dir: Option<PathBuf>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -93,6 +96,7 @@ impl AdminState {
             sessions: crate::admin::session::SessionStore::new(1800),
             guard: crate::admin::session::LoginGuard::new(),
             env: Arc::new(env),
+            secrets,
             web_dir,
         })
     }
