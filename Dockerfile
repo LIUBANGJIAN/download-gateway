@@ -27,6 +27,14 @@ COPY crates ./crates
 COPY src ./src
 COPY migrations ./migrations
 
+# 版本号在**编译期**注入（`option_env!("APP_VERSION")`）。
+# 必须放在这里而不是文件顶部：改动它会令此后所有层缓存失效，
+# 放顶部会连 apt-get 那一层也一起失效，白白多花时间。
+# 默认值刻意写成 `0.0.0-unknown` 而不是 `0.1.0` —— 让"忘了传 build-arg"
+# 这件事**可见**（冒烟断言会因此红），而不是悄悄退化成看起来正常的 0.1.0。
+ARG APP_VERSION=0.0.0-unknown
+ENV APP_VERSION=${APP_VERSION}
+
 RUN cargo build --release --locked
 
 # ---------- 阶段 2：瘦运行镜像 ----------
@@ -55,4 +63,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 
 USER app
+
+# 运行阶段可见的 OCI 版本标签，便于 `docker inspect` 直接看到（不进二进制也能读）。
+# 需在本阶段重新声明 ARG：`--build-arg` 只对该阶段已声明的 ARG 生效。
+ARG APP_VERSION=0.0.0-unknown
+LABEL org.opencontainers.image.version="${APP_VERSION}"
+
 ENTRYPOINT ["download-gateway"]

@@ -24,5 +24,42 @@ pub mod state;
 pub mod store;
 pub mod tasks;
 
-/// 本 crate 版本（供 `/healthz` 与日志上报）。
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// 本版本。CI 构建时由 `APP_VERSION` **在编译期**注入（形如 `0.1.7`）；
+/// 本地开发 / 未注入时退回 Cargo 清单里的版本（`0.1.0`）。
+/// 注意 `option_env!` 是编译期求值 —— 这不是运行时读环境变量。
+pub const VERSION: &str = match option_env!("APP_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
+#[cfg(test)]
+mod tests {
+    use super::VERSION;
+
+    /// 「版本号一定长成 X.Y.Z」的不变量（不依赖是否注入）。
+    #[test]
+    fn version_is_three_numeric_parts() {
+        let parts: Vec<&str> = VERSION.split('.').collect();
+        assert_eq!(parts.len(), 3, "版本号应为三段 X.Y.Z，实际 = {VERSION}");
+        for p in &parts {
+            assert!(
+                !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()),
+                "版本号每一段都应为纯数字，实际 = {VERSION}"
+            );
+        }
+    }
+
+    /// 注入链取证：CI 注入 `APP_VERSION` 时必须逐字生效；未注入时退回清单版本。
+    /// 配合「`APP_VERSION=0.1.7` 下重编」的两次运行，证明注入真的进了二进制。
+    #[test]
+    fn version_follows_injected_env() {
+        match option_env!("APP_VERSION") {
+            Some(v) => assert_eq!(VERSION, v, "注入 APP_VERSION={v} 后 VERSION 应逐字相等"),
+            None => assert_eq!(
+                VERSION,
+                env!("CARGO_PKG_VERSION"),
+                "未注入时应退回 CARGO_PKG_VERSION"
+            ),
+        }
+    }
+}

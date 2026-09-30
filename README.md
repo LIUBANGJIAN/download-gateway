@@ -56,7 +56,7 @@ docker run --rm -p 6800:6800 -p 8080:8080 -v "$PWD/data:/data" download-gateway
 ```bash
 curl -fsS http://127.0.0.1:8080/healthz
 curl -fsS http://127.0.0.1:6800/healthz
-# → {"db":true,"port":"admin"|"public","status":"ok","uptime_seconds":N,"version":"0.1.0"}
+# → {"db":true,"port":"admin"|"public","status":"ok","uptime_seconds":N,"version":"0.1.N"}
 # db:false 且 HTTP 503 = 库不通。这时先查数据卷属主，别往下查协议。
 ```
 
@@ -269,6 +269,23 @@ IMAGE_TAG=sha-eb6a12c docker compose up -d       # 或写进同目录的 .env
 > 设计文档 `02 §5.8` 里的 `DISPATCH_MASTER_KEY` / `DISPATCH_NODES_FILE` 属于后续任务，
 > **当前源码没有任何读取点**，现在设上不会有任何效果。
 
+## 版本号规则
+
+- **基线 tag**：`v0.1.0` 由人工在发布时打（`git tag v0.1.0 && git push origin v0.1.0`），它是版本的锚点。
+- **每次提交到 `main`，CI 自动把 patch 位 +1**，规则：
+  `APP_VERSION = <最近可达 tag 的 major>.<minor>.<(tag 的 patch + 该 tag 之后的提交数)>`。
+  当前 HEAD 就是 `v0.1.0` 本身（其后 0 个提交）⇒ `0.1.0`；再提交一次 ⇒ `0.1.1`；
+  以后打了 `v0.2.0`，其后的提交自然接成 `0.2.1`、`0.2.2`……
+- 这个号出现在三处，便于识别「本地/线上跑的到底是哪一版」：
+  1. **镜像标签**：`v0.1.N` 与 `0.1.N`（挂在多架构 manifest 上）；
+  2. `docker inspect` 的 `org.opencontainers.image.version`（OCI 标签）；
+  3. **容器内 `/healthz` 的 `version` 字段**（二进制自报；CI 冒烟会拿它与本次期望版本**逐字比对**）。
+- **`Cargo.toml` 里的 `0.1.0` 是基线版本，不随提交变动。** 刻意如此：让 CI 反向提交版本文件会造成
+  「提交 → 触发 CI → 又提交 → 再触发」的自我触发循环。因此用**编译期注入**
+  （`option_env!("APP_VERSION")`，见 `crates/dispatch-core/src/lib.rs`）而非回写仓库。
+- ⚠️ 本地 `cargo build` / `cargo run` **不**注入 `APP_VERSION`，`/healthz` 会显示清单版本 `0.1.0`
+  （这是预期的本地默认）。要复现 CI 的注入形态：`APP_VERSION=0.1.7 cargo build --release`。
+
 ## 工程结构
 
 ```
@@ -439,8 +456,8 @@ IMAGE=liubangjian/download-gateway:sha-<短SHA> bash .github/scripts/smoke.sh
    但**注解是公开可读的**。所以脚本在成功时打一条 `::notice`，内容形如：
 
    ```
-   容器冒烟通过 断言=66 条全部通过 | 镜像=…/download-gateway:sha-<短SHA>
-                | digest=sha256:7c73…7c1a | 应用自报版本=0.1.0
+   容器冒烟通过 断言=67 条全部通过 | 镜像=…/download-gateway:sha-<短SHA>
+                | digest=sha256:7c73…7c1a | 应用自报版本=0.1.N
    ```
 
    其中 **`应用自报版本` 取自容器内 `/healthz`** —— 一个没真正起来的容器不可能报出自己的版本号，

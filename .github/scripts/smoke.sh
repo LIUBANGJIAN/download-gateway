@@ -28,6 +28,11 @@
 # --------
 #   IMAGE  必填。要验证的镜像引用（**必须是本次刚构建的那个**，不能是 latest，
 #          否则验的是上一版镜像 —— 那种"绿"毫无意义）。
+#   EXPECT_VERSION  本次提交**应有**的版本号，形如 `0.1.7`（CI 里由 gate 作业算出后传入）。
+#          用于断言「容器 `/healthz` 自报的 version == 它」—— 这是证明
+#          **版本号真的被编译期注入进了二进制**的唯一手段。
+#          **CI 下必填**：在 CI 里为空会被判 FAIL（见下方断言），
+#          免得有人把这条断言静默跳过 —— 那正是本脚本通篇在防的"假绿"。
 #
 # 本脚本自己会在容器里注入两个**确定性**凭据（管理口令 / 对外公共令牌），
 # 因此验的是「门禁真的开着」而不是「默认放行」：
@@ -52,6 +57,8 @@ ADMIN_PW="ci-smoke-pass-9f2c"
 # 只验其中一边的鉴权测试是没意义的：只验拒绝，分不清"门禁在工作"还是"接口根本没实现"；
 # 只验放行，则完全测不出门禁是否存在。
 PUBLIC_TOKEN="ci-smoke-public-token-2f7a"
+# 本次提交**应有**的版本号（由 CI 的 gate 作业算出后传入）。空 = 本地手动跑。
+EXPECT_VERSION="${EXPECT_VERSION:-}"
 PUB="http://127.0.0.1:${PUB_PORT}"
 ADM="http://127.0.0.1:${ADM_PORT}"
 COOKIE_JAR="$(mktemp)"
@@ -424,6 +431,9 @@ echo "── 12. 实测证据（这一节是给「空转的绿」上的锁）─
 # `expect_absent` 7），循环展开后运行时更多（2 个端口、7 个静态资源、4 个导航、3 个只读路径）。
 # 取一个有富余的值，而不是贴着实际条数 —— 将来正常增删几条断言不应该把这条锁弄红；
 # 它的职责只是抓"脚本半途没跑起来"，不是精确对账。
+# 实测锚点：2026-09-30 的 CI 运行报出 66 条；之后加入「版本号注入生效」1 条 ⇒ CI 下应为 67。
+# 40 对 67 仍有约四成富余，**不跟着 +1** —— 这条锁是粗粒度的，一旦变成精确对账，
+# 每次加断言都得改它，迟早被人当噪音删掉（那才是真正的损失）。
 MIN_CHECKS=40
 
 RUNNING="$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo 'false')"
@@ -434,6 +444,28 @@ if [ -z "$IMG_DIGEST" ]; then
 fi
 # 从健康检查里取应用**自己报**的版本号 —— 能拿到它就证明容器里的进程真的起来并响应了。
 VER="$(curl -s --max-time 5 "${ADM}/healthz" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+
+# 断言：容器**自报**的版本号，必须等于本次提交**应有**的版本号。
+#
+# 为什么这条值得单独存在：版本号是 CI **在编译期**注入二进制的
+# （`ci.yml` 的 `build-args: APP_VERSION` → `Dockerfile` 的 `ARG`/`ENV` →
+#   `crates/dispatch-core/src/lib.rs` 的 `option_env!("APP_VERSION")`）。
+# 这条链上任何一环断了 —— 忘了传 build-arg、ARG 放错阶段、冒烟拉到了上一版镜像 ——
+# **症状都只是「版本号不对」，其余一切照常**：容器起得来、接口全通、别的断言全绿。
+# 也就是说，这是个**不会自己暴露**的失败。这条断言把它变成一个红。
+#
+# 三个分支，且 **CI 下不允许静默跳过**（跳过本身就是一次"假绿"）：
+if [ -n "$EXPECT_VERSION" ]; then
+  if [ "$VER" = "$EXPECT_VERSION" ]; then
+    pass "容器自报版本与本次提交期望版本一致（${EXPECT_VERSION}）"
+  else
+    fail "容器自报版本=${VER:-（未取到）} ≠ 本次提交期望版本=${EXPECT_VERSION} —— 版本号没有真正注入到二进制里（请查 build-arg APP_VERSION 是否传给了 docker build、Dockerfile 里 ARG 的位置、以及冒烟是否拉到的是本次镜像而不是上一版）"
+  fi
+elif [ -n "${GITHUB_ACTIONS:-}" ]; then
+  fail "CI 环境下 EXPECT_VERSION 为空 —— 版本号断言被静默跳过（请查 ci.yml 里 gate 的 app_version 是否算出来、是否传到了 smoke 作业）"
+else
+  echo "  [SKIP] 本地手动运行且未提供 EXPECT_VERSION，跳过版本号断言（CI 下走不到这个分支）"
+fi
 
 echo "  容器仍在运行        : ${RUNNING}"
 echo "  被验证镜像的 digest : ${IMG_DIGEST}"
@@ -467,6 +499,7 @@ if [ "$FAILS" -eq 0 ]; then
     echo "| 被验证镜像 | \`${IMAGE}\` |"
     echo "| 镜像 digest | \`${IMG_DIGEST}\` |"
     echo "| 应用自报版本 | \`${VER:-未知}\` |"
+    echo "| 期望版本（本次提交） | \`${EXPECT_VERSION:-（未要求）}\` |"
     echo "| 断言总数 | ${CHECKS} |"
     echo "| 失败数 | ${FAILS} |"
     echo ""
@@ -477,6 +510,7 @@ if [ "$FAILS" -eq 0 ]; then
     echo "- 节点：增删改 + 启停开关 + 密码回看 + 限速 KB/s↔B/s 折算 + 探测离线路径"
     echo "- 策略：保存与回读 + 越界优先级 / 未知键 / 关闭安全阀 均须 422"
     echo "- **管理台不得能提交任务**（\`POST /api/admin/tasks\` 与 \`GET /tasks/new\` 都必须不存在）"
+    echo "- **版本号注入生效**：容器 \`/healthz\` 自报的 version 逐字等于本次提交应有的版本号"
   } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
   exit 0
 else

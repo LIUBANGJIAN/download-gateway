@@ -161,7 +161,32 @@ jobs:
       # 消费侧拿到的是空串 —— 错误于是以「下游某个谜语人报错」的形式延迟暴露。
       # 镜像名因此**不再经过 output**，改由 build / merge 各自从 secret 现取。
       publish: ${{ steps.check.outputs.publish }}
+      # 版本号**不是** secret 派生的，可以安全作为 job output（D-12 只吞 secret 派生值）。
+      app_version: ${{ steps.ver.outputs.app_version }}
     steps:
+      # fetch-depth: 0 是**必须**的：默认 depth=1 拿不到 tag 也拿不到提交历史，
+      # `git describe` / `git rev-list --count` 会直接失效。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: ver
+        run: |
+          set -uo pipefail
+          BASE="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || true)"
+          if [ -z "$BASE" ]; then
+            echo "::warning title=版本号兜底::找不到 semver tag，退回 0.1.0"
+            echo "app_version=0.1.0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BASE_NUM="${BASE#v}"
+          MAJ="${BASE_NUM%%.*}"
+          REST="${BASE_NUM#*.}"
+          MIN="${REST%%.*}"
+          PAT="${REST#*.}"
+          [ "$PAT" = "$REST" ] && PAT=0
+          N="$(git rev-list --count "${BASE}..HEAD")"
+          echo "app_version=${MAJ}.${MIN}.$((PAT + N))" >> "$GITHUB_OUTPUT"
+          echo "基准 tag=${BASE} 之后提交数=${N} ⇒ ${MAJ}.${MIN}.$((PAT + N))"
       - id: check
         env:
           SECRET_USER: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -327,6 +352,11 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
+          # 版本号在**编译期**注入二进制（见 Dockerfile 的 ARG/ENV 与
+          # crates/dispatch-core/src/lib.rs 的 option_env!）。缺了它会退化成
+          # `0.0.0-unknown`，冒烟断言会因此红 —— 属于刻意可见的失败。
+          build-args: |
+            APP_VERSION=${{ needs.gate.outputs.app_version }}
 
       # 把关键取值变成**公开可读的错误注解**。
       # 原因：Actions 作业日志通过 API 拉取需要管理员权限（未认证返回 403
@@ -384,6 +414,11 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
+            # 每次提交自动 +1 的版本号（见 gate 的 ver 步骤）。人类读的那一个。
+            # merge 的 job 级 `if:` 已排除 PR（`github.event_name != 'pull_request'`），
+            # 故这里**不需要** `enable` 条件 —— 能走到这一步的一定是 main push 或 tag。
+            type=raw,value=v${{ needs.gate.outputs.app_version }}
+            type=raw,value=${{ needs.gate.outputs.app_version }}
             # ⚠️ `format=short` 必须**显式写出来**，不能靠默认值。
             # 下游 smoke 作业按 `${GITHUB_SHA:0:7}` 拼出同一个 tag，用来精确拉取本次产物。
             # 两个"7"是**隐式耦合**：它们之所以相等，只因为两侧都**没有**设
@@ -471,6 +506,8 @@ jobs:
         id: resolve
         env:
           PUBLISH: ${{ needs.gate.outputs.publish }}
+          # 回退到本地构建时也要把版本号传进去（否则镜像自报 0.0.0-unknown，冒烟断言会红）。
+          EXPECT_VERSION: ${{ needs.gate.outputs.app_version }}
         run: |
           set -uo pipefail
           # 与 merge 里 `type=sha,prefix=sha-,format=short` 拼法必须一致（见那边的注释）。
@@ -487,13 +524,15 @@ jobs:
           else
             echo "::notice title=未配置 Docker Hub 凭据::本次没有已发布镜像可用，改为本地构建源码镜像做冒烟（不推送）。"
           fi
-          docker build -t smoke-local:ci .
+          docker build --build-arg APP_VERSION="${EXPECT_VERSION:-0.0.0-unknown}" -t smoke-local:ci .
           echo "ref=smoke-local:ci" >> "$GITHUB_OUTPUT"
           echo "mode=local" >> "$GITHUB_OUTPUT"
 
       - name: 容器冒烟
         env:
           IMAGE: ${{ steps.resolve.outputs.ref }}
+          # 传给 smoke.sh：容器内 /healthz 自报版本必须与本次提交期望版本逐字相等。
+          EXPECT_VERSION: ${{ needs.gate.outputs.app_version }}
         run: bash .github/scripts/smoke.sh
 
       # 与 build / merge 同样的诊断策略：Actions 作业日志通过 API 拉取要管理员权限，
