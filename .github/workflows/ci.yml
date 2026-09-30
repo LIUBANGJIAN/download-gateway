@@ -73,8 +73,18 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all --check
 
+      # ⚠️ 必须带 `--workspace`。这里踩过一次坑：原先只写
+      # `cargo clippy --all-targets --all-features`，而 **`--all-targets` 不是
+      # `--all`** —— 前者指「lib/bins/tests/benches/examples 全部目标种类」，
+      # 后者才是「全部 workspace 成员」。根 Cargo.toml 同时是 workspace 根、
+      # 又含 `[package]`（**非虚拟清单**），故不带 `--workspace` 时 cargo 默认
+      # **只选根包 `download-gateway`**；`crates/dispatch-core` 与
+      # `crates/bitcomet-api` **从未被 clippy 检查过**。
+      # 后果实证：`src/admin/policy.rs` 里一条 `clippy::bool_assert_comparison`
+      # 就这么一路绿着进了 main（同作业的 `fmt --all` 与 `test --all` 用的都是
+      # `--all` = workspace，反而是 clippy 这条漏了）。
       - name: clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: cargo test
         run: cargo test --all --locked

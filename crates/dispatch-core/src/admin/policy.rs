@@ -653,7 +653,7 @@ mod tests {
         .unwrap();
         let v = load(&s).await.unwrap();
         let lt = v.iter().find(|p| p.key == "least_tasks").unwrap();
-        assert_eq!(lt.enabled, true, "坏行应退回默认值");
+        assert!(lt.enabled, "坏行应退回默认值");
         assert!(!lt.customized);
         s.shutdown().await;
     }
