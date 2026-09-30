@@ -176,6 +176,7 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "aria2.addUri",
     "aria2.remove",
     "aria2.forceRemove",
+    "aria2.removeDownloadResult",
     "aria2.pause",
     "aria2.forcePause",
     "aria2.pauseAll",
@@ -209,6 +210,45 @@ pub async fn handle_method(
     match method {
         "aria2.addUri" => add_uri(st, &params).await,
         "aria2.remove" | "aria2.forceRemove" => {
+            // aria2 官方语义（manual §"aria2.remove"）：
+            //   "This method removes the download denoted by gid (string). If the
+            //    specified download is in progress, it is first stopped. The status of
+            //    the removed download becomes `removed`. This method returns GID of
+            //    removed download."
+            // ⇒ **软删**：只把行推进 `removed` 终态，**不**删行，因此删除后仍可被
+            //   `tellStatus` / `tellStopped` 查到；真正的清除由
+            //   `aria2.removeDownloadResult` 完成。
+            // `forceRemove` 官方定义 = 「与 remove 相同，仅省去耗时动作（如通知 tracker）」
+            // （"behaves just like aria2.remove except ... without performing any actions
+            // which take time"）。本代理无 tracker 语义、也不做耗时收尾，故二者等价。
+            // 返回值：官方为「被删下载的 GID」，故回 `Value::String(gid)`。
+            // GID 不存在时的业务错误由 `set_by_gid` 天然给出（`E_ARIA_GENERIC`）。
+            //
+            // ⚠️ 未来地雷（**只记录，不要动 `migrations/`**）：软删保留了整行，行上的
+            //   `(group_id, episode_no)` 仍占用部分唯一索引 `ux_task_group_episode`
+            //   （`migrations/V1__init.sql:250`）。当前分组（T06/T07）尚未落地、建任务时
+            //   `group_id`/`episode_no` 均为 NULL（部分索引对 NULL 不去重），**暂无影响**；
+            //   但等分组落地后，一条已 `removed` 的旧行会把「同一组同一集重新添加」堵死在
+            //   唯一索引上。届时应让 `remove` 顺带把这些列置空，或把唯一索引改成
+            //   `... WHERE episode_no IS NOT NULL AND <逻辑删除标记> IS NULL`。
+            let gid = str_param(&params, 0)?;
+            set_by_gid(st, &gid, "removed", "removed", None).await?;
+            Ok(Value::String(gid))
+        }
+        "aria2.removeDownloadResult" => {
+            // aria2 官方语义（manual §"aria2.removeDownloadResult"）：
+            //   "This method removes a completed/error/removed download denoted by gid
+            //    from memory. This method returns OK for success."
+            // 即：这才是**真正清除**下载结果的动作——把库行硬删（`file`/`progress`
+            // 由 `ON DELETE CASCADE` 清理）；成功后返回字符串 `"OK"`。
+            //
+            // 与官方语义的**差异（如实记录）**：官方只对「已完成/出错/已移除」（即 stopped）
+            // 的下载定义此操作，**但手册并未逐字写明**对进行中（active/waiting/paused）
+            // 任务调用时的后果（真实 aria2 会报「not in stopped state」，我们**未确证**该
+            // 报错文本/错误码）。本实现选择「更简单」而非「更严格」：**不校验前置状态**，
+            // 只要 GID 存在就直接硬删。理由：常规客户端总是先 `remove`（进 removed 终态）
+            // 再 `removeDownloadResult`，此时前置条件天然满足；而多一条状态校验会引入
+            // 需与真实 aria2 逐字对齐的报错口径。GID 不存在时返回业务错误（与 `remove` 一致）。
             let gid = str_param(&params, 0)?;
             let row = query::get_by_gid(&st.store, &gid)
                 .await
@@ -217,7 +257,7 @@ pub async fn handle_method(
             query::delete_task(&st.store, &row.task_id)
                 .await
                 .map_err(store_err)?;
-            Ok(Value::String(gid))
+            Ok(Value::String("OK".into()))
         }
         "aria2.pause" | "aria2.forcePause" => {
             let gid = str_param(&params, 0)?;

@@ -299,6 +299,11 @@ async fn run_action(st: &AdminState, id: &str, action: &str, req: &ActionReq) ->
                     "无法删除节点文件：本任务在节点侧没有文件记录（调度/下发尚未落地）。若只想移除网关侧的任务记录，请不要勾选『同时删除节点上的文件』。",
                 );
             }
+            // 注意：这里**刻意**不是 aria2 语义。管理台的「删除」是运维动作「把这条记录清掉」，
+            // 故**硬删**整行；而 aria2 协议面（`crates/dispatch-core/src/ingress/aria2.rs`）的
+            // `aria2.remove` 走**软删**（进 `removed` 终态、仍可被 `tellStatus`/`tellStopped`
+            // 查到），真正的清除由 `aria2.removeDownloadResult` 完成。
+            // 两条路径语义不同**是有意为之**，不是漏改，请勿"顺手对齐"。
             match query::delete_task(&st.store, &row.task_id).await {
                 Ok(_) => ok(json!({ "task_id": row.task_id, "result": "removed" })),
                 Err(e) => err(

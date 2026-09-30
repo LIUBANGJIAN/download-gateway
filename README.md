@@ -379,9 +379,11 @@ docker-compose.yml      部署用 Compose（命名卷 / 管理口只绑回环 / 
 
 - **T03–T07**：节点健康检查 / 调度器选点 / 真正下发 / 轮询同步 / 去重。**任务只会入库排队，不会真正下载**
   （启动日志有 `WARN` 明示）。
-- **`aria2.remove` 的语义**：当前是直接删除任务行（`DELETE FROM task`），而 aria2 官方语义是删除后进入
-  `removed` 终态、仍可被 `tellStopped` 查到，真正清除由 `removeDownloadResult` 完成；后者目前返回 `-32601`。
-  这是初版即存在的缺口，非回归，待下一个增量处理。
+- **aria2 面的删除语义已对齐官方，与管理台刻意不同。** `aria2.remove` / `aria2.forceRemove` 是**软删**：
+  把任务推进 `removed` 终态、**不删行**，因此删除后仍可被 `tellStatus` / `tellStopped` 查到；
+  **真正的清除**由 `aria2.removeDownloadResult` 完成（返回 `"OK"`）。
+  但**管理台**的「删任务」（`remove` 动作，`POST /api/admin/tasks/{id}`）仍是**硬删**整行——那是运维动作
+  「把这条记录清掉」，与 aria2 协议面语义不同，**属有意为之**（管理台该不该也给软删/清除的区分另议）。
 
 ## 开发
 
