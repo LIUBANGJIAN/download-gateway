@@ -128,12 +128,17 @@ func TestClassifyReverseMapping(t *testing.T) {
 		want       want
 	}{
 		{"complete", "complete", nil, 1000, want{StateCompleted, nil}},
-		{"error+node_down", "error", strPtr("node_down"), 0, want{StateFailed, errPtr(ErrNodeDown)}},
+		// ★B1 起节点自报失败落 `failed_terminal`（不再用 Rust 遗留值 `failed`），
+		// 理由见 task.go 的 StateFailedTerminal 注释（INV-A1 按前者排除终态）。
+		{"error+node_down", "error", strPtr("node_down"), 0, want{StateFailedTerminal, errPtr(ErrNodeDown)}},
+		{"error 无错误码", "error", nil, 0, want{StateFailedTerminal, errPtr(ErrUnknown)}},
 		{"paused 未开始", "paused", nil, 0, want{StatePaused, errPtr(ErrNotStarted)}},
 		{"paused 有进度", "paused", nil, 10, want{StatePaused, nil}},
 		{"running", "running", nil, 10, want{StateRunning, nil}},
 		{"waiting", "waiting", nil, 0, want{StateQueued, nil}},
 		{"removed", "removed", nil, 0, want{StateRemoved, nil}},
+		// BitComet 的成功码是 "OK"；漏掉它会把每次成功都判成 unknown 错误。
+		{"OK 不算错误", "running", strPtr("OK"), 10, want{StateRunning, nil}},
 	}
 	for _, c := range cases {
 		gotState, gotErr := ClassifyNodeStatus(c.nodeStatus, c.errorCode, c.permil)
@@ -272,4 +277,104 @@ func errEq(a, b *ErrorClass) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
+}
+
+// TestClassifyNodeStatus_StoppedDualMeaning 守 B1 规格 §7.6 / §9 的 R-2 行。
+//
+// 这段分支此前**完全不存在**：BitComet 实测只上报 `running`/`stopped`（F4），
+// 而旧实现把 `stopped` 落进 `default: queued`。后果不是"显示不好看"：
+//   - 失败任务被分类成 `queued` ⇒ 调度循环反复扫到、反复重投；
+//   - 对外永远不显 `error` ⇒ 用户以为还在排队。
+//
+// 因此这四条断言全部是**行为断言**，删掉 stopped 分支就会 4 红。
+func TestClassifyNodeStatus_StoppedDualMeaning(t *testing.T) {
+	cases := []struct {
+		name      string
+		nodeStat  string
+		errorCode *string
+		permil    int64
+		wantState InternalState
+		wantErr   *ErrorClass
+	}{
+		// ① 带错误码 ⇒ 真的失败了，不得报 paused
+		{"stopped+server_file_not_found", "stopped", strPtr("server_file_not_found"), 0, StateFailedTerminal, errPtr(ErrServerFileNotFound)},
+		{"stopped+out_of_retry", "stopped", strPtr("out_of_retry"), 0, StateFailedTerminal, errPtr(ErrOutOfRetry)},
+		// ② 无错误 + 满进度 ⇒ 做种完成
+		{"stopped+1000", "stopped", strPtr("OK"), 1000, StateCompleted, nil},
+		{"stopped+nil", "stopped", nil, 1000, StateCompleted, nil},
+		// ③ 无错误 + 零进度 ⇒ start_later 的正常未启动（非错误）
+		{"stopped+0", "stopped", nil, 0, StatePaused, errPtr(ErrNotStarted)},
+		// ④ 无错误 + 有进度 ⇒ 暂停
+		{"stopped+500", "stopped", strPtr(""), 500, StatePaused, nil},
+		// 大小写/空白容忍（节点版本之间可能不一致）
+		{" STOPPED 大写", " STOPPED ", nil, 0, StatePaused, errPtr(ErrNotStarted)},
+	}
+	for _, c := range cases {
+		gotState, gotErr := ClassifyNodeStatus(c.nodeStat, c.errorCode, c.permil)
+		if gotState != c.wantState {
+			t.Errorf("%s：state = %q，期望 %q（旧实现会得到 queued）", c.name, gotState, c.wantState)
+		}
+		if !errEq(gotErr, c.wantErr) {
+			t.Errorf("%s：error_class = %v，期望 %v", c.name, derefErr(gotErr), derefErr(c.wantErr))
+		}
+	}
+}
+
+// TestFailedTerminalIsNeverReportedAsWaiting 守 R-1 派生的「别把失败藏起来」：
+// 新增的 failed_terminal 必须在 Aria 面显示成 error。
+// 若不补 DeriveAriaStatus 分支，它会落 `default: waiting` ⇒ 用户看到"排队中"。
+func TestFailedTerminalIsNeverReportedAsWaiting(t *testing.T) {
+	ec := ErrNodeDown
+	if got := DeriveAriaStatus(StateFailedTerminal, 0, &ec); got != AriaError {
+		t.Fatalf("failed_terminal 应映射为 error，实得 %q", got)
+	}
+}
+
+// TestDispatchViewReflectsRealState 守一条**曾经的谎报**：
+// `dispatched` / `dispatch_state` 在调度内核落地前是硬编码的
+// （`false` / `queued_no_node`），内核落地后若不改成派生值，
+// 任务明明已经在节点上下载，管理台与 aria2 客户端仍会看到"未派发"。
+//
+// 这条用例的可证伪性很直接：把实现改回常量 false/queued_no_node ⇒ 前三个断言全红。
+func TestDispatchViewReflectsRealState(t *testing.T) {
+	node := int64(7)
+
+	cases := []struct {
+		name       string
+		nodeID     *int64
+		state      InternalState
+		wantDisp   bool
+		wantPhrase string
+	}{
+		{"排队未落点", nil, StateQueued, false, "queued_no_node"},
+		{"已落点但节点侧排队", &node, StateQueued, true, "queued_on_node"},
+		{"已下发待确认", &node, StateDispatching, true, "dispatching"},
+		{"下载中", &node, StateRunning, true, "running"},
+		{"完成", &node, StateCompleted, true, "completed"},
+		{"终态失败", &node, StateFailedTerminal, true, "failed"},
+		{"已移除", &node, StateRemoved, true, "removed"},
+	}
+	for _, c := range cases {
+		disp, phrase := DispatchView(c.nodeID, c.state)
+		if disp != c.wantDisp {
+			t.Errorf("%s：dispatched = %v，期望 %v", c.name, disp, c.wantDisp)
+		}
+		if phrase != c.wantPhrase {
+			t.Errorf("%s：dispatchState = %q，期望 %q", c.name, phrase, c.wantPhrase)
+		}
+	}
+}
+
+// TestDispatchViewNeverSaysNoNodeWhenNodeIsSet 是上面那条的核心不变量：
+// **只要有 node_id，就绝不能报 queued_no_node**。
+//
+// 单独提出来是因为它是用户最容易撞见的矛盾形态：
+// 列表里 node_id=1、却写着"没有可用节点"。
+func TestDispatchViewNeverSaysNoNodeWhenNodeIsSet(t *testing.T) {
+	node := int64(1)
+	for _, st := range AllInternalStates() {
+		if _, phrase := DispatchView(&node, st); phrase == "queued_no_node" {
+			t.Errorf("state=%q 且有 node_id 时仍报 queued_no_node", st)
+		}
+	}
 }

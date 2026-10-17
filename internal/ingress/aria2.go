@@ -313,8 +313,16 @@ func (s *server) handleMethod(r *http.Request, method string, params []any) (any
 
 // addURI 实现 `aria2.addUri`：只取首个 URL，`out`/`dir`/`pause` 映射到入库字段。
 func (s *server) addURI(ctx contextQ, params []any) (any, *rpcErr) {
+	// ⚠️ 必须先判长度再索引：`aria2.addUri` 的 `params` 可以是**只有一段**的
+	// `[["url"]]`（绝大多数客户端就是这么发的）。直接写 `params[1]` 会在这里
+	// panic —— 而 panic 发生在 HTTP handler 里，症状是「连接被重置 + 500」，
+	// 从客户端看像"网关挂了"，从日志看才发现是索引越界。
+	// 这不是假设：2026-10-18 用 `[["https://...r.mkv"]]` 实测触发过。
+	if len(params) == 0 {
+		return nil, newRPCErr(rpcInvalidParams, "aria2.addUri 需要 [urls] 参数")
+	}
 	uris, _ := params[0].([]any)
-	if uris == nil {
+	if len(uris) == 0 {
 		return nil, newRPCErr(rpcInvalidParams, "aria2.addUri 需要 [urls] 参数")
 	}
 	first, ok := uris[0].(string)
@@ -325,15 +333,17 @@ func (s *server) addURI(ctx contextQ, params []any) (any, *rpcErr) {
 		out, dir   *string
 		startLater bool
 	)
-	if opts, ok := params[1].(map[string]any); ok {
-		if v, ok := opts["out"].(string); ok {
-			out = &v
-		}
-		if v, ok := opts["dir"].(string); ok {
-			dir = &v
-		}
-		if v, ok := opts["pause"].(string); ok && v == "true" {
-			startLater = true
+	if len(params) > 1 {
+		if opts, ok := params[1].(map[string]any); ok {
+			if v, ok := opts["out"].(string); ok {
+				out = &v
+			}
+			if v, ok := opts["dir"].(string); ok {
+				dir = &v
+			}
+			if v, ok := opts["pause"].(string); ok && v == "true" {
+				startLater = true
+			}
 		}
 	}
 	created, err := tasks.CreateTask(ctx, s.st.Store, tasks.TaskCreateInput{
@@ -441,15 +451,21 @@ func statusList(rows []domain.TaskRow) []any {
 	return out
 }
 
-// statusObj 组装 aria2 `tellStatus` 风格对象（含两处**诚实字段**）：
-// `dispatched:false` / `dispatchState:"queued_no_node"` 与 `dir:""` + `dirKnown:false`
-// —— 代理不知道节点落盘路径，绝不编造。
+// statusObj 组装 aria2 `tellStatus` 风格对象。
+//
+// `dispatched` / `dispatchState` 由 [domain.DispatchView] **按库里的真实状态派生**：
+// 调度内核落地后，这两个字段如果还是常量 false/queued_no_node，就成了谎报
+// （任务已在节点上下载，客户端却看到"未派发"）。
+//
+// `dir:""` + `dirKnown:false` 仍是刻意的诚实字段：代理确实不知道节点落盘路径，
+// 绝不拿 url 猜一个。
 func statusObj(t *domain.TaskRow) map[string]any {
 	view := domain.AriaViewFrom(t)
 	total := "0"
 	if t.TotalSize != nil {
 		total = strconv.FormatInt(*t.TotalSize, 10)
 	}
+	dispatched, dispatchState := domain.DispatchView(t.NodeID, t.InternalState)
 	return map[string]any{
 		"gid":                    derefString(t.GID),
 		"status":                 string(view.Status),
@@ -466,8 +482,8 @@ func statusObj(t *domain.TaskRow) map[string]any {
 		"numPieces":              "0",
 		"dir":                    "",
 		"dirKnown":               false,
-		"dispatched":             false,
-		"dispatchState":          "queued_no_node",
+		"dispatched":             dispatched,
+		"dispatchState":          dispatchState,
 		"errorCode":              strconv.FormatInt(view.ErrorCode, 10),
 		"errorMessage":           view.ErrorMessage,
 		"verifiedLength":         "0",

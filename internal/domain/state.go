@@ -1,5 +1,7 @@
 package domain
 
+import "strings"
+
 // internal_state ↔ Aria2 status 的映射。
 //
 // 关键点：Aria2 的 `status` 只有 6 个取值（waiting/paused/active/complete/error/removed），
@@ -31,7 +33,7 @@ func DeriveAriaStatus(internalState InternalState, permillage int64, errorClass 
 		return AriaPaused
 	case StateCompleted:
 		return AriaComplete
-	case StateFailed:
+	case StateFailed, StateFailedTerminal:
 		return AriaError
 	case StateRemoved:
 		return AriaRemoved
@@ -84,42 +86,82 @@ func AriaViewFrom(t *TaskRow) AriaView {
 // ClassifyNodeStatus 是 §4.1.6「stopped 双义」的**反解**。
 //
 // 输入是节点上报的 `status` / `errorCode`，输出我们内部的 `(internal_state, error_class)`。
-// 纯函数，当前**不参与运行期逻辑**（调度内核 T03–T07 尚未落地），
-// 但它的值域被 DDL 的 CHECK 约束钉住，所以先实现、先测，避免将来写调度器时随手造状态值。
+// 纯函数；B1 起由 `internal/sync/reconcile.go` **真正调用**（此前只测不用）。
 //
-// `error_code` 为 nil / 空串 / `"none"` 时视为"无错误上报"。
+// `error_code` 为 nil / 空串 / `"none"` / `"OK"` 时视为"无错误上报"——
+// 最后一项是 BitComet 的成功码，漏掉它会把每一次成功都判成 `unknown` 错误。
+//
+// # `stopped` 的双义（design/02 §4.1.6，v2 关键修正）
+//
+// | 输入 | 产出 |
+// |---|---|
+// | `stopped` + `error_code` 非空 | `failed_terminal` + 映射后分类 —— **真的失败了** |
+// | `stopped` + 无错误 + `permillage ≥ 1000` | `completed` |
+// | `stopped` + 无错误 + `permillage == 0` | `paused` + `not_started`（`start_later` 的正常未启动） |
+// | `stopped` + 无错误 + `0 < permillage < 1000` | `paused` |
+//
+// 这段分支**曾经完全不存在**：节点报 `stopped` 一律落 `default: queued`，
+// 于是失败任务被调度循环反复扫到、反复重投，对外还永远不显 `error`。
+// 这是 `design/02 §4.1.6` 点名要修的静默错误，也是 B1 必须补齐的一条。
 func ClassifyNodeStatus(nodeStatus string, errorCode *string, permillage int64) (InternalState, *ErrorClass) {
-	var ec *ErrorClass
-	if errorCode != nil && *errorCode != "" && *errorCode != string(ErrNone) {
-		mapped := MapErrorClass(*errorCode)
-		ec = &mapped
-	}
+	ec := mapNodeError(errorCode)
 
-	switch nodeStatus {
-	case "complete", "completed":
+	switch strings.ToLower(strings.TrimSpace(nodeStatus)) {
+	case "complete", "completed", "seeding", "seed":
 		return StateCompleted, nil
 	case "error", "failed":
-		raw := string(ErrUnknown)
-		if ec != nil {
-			raw = string(*ec)
-		}
-		mapped := MapErrorClass(raw)
-		return StateFailed, &mapped
+		// 节点自己说失败：一律终态（B1 写 `failed_terminal`，不用遗留值 `failed`）。
+		return StateFailedTerminal, nonNilClass(ec)
 	case "paused":
 		if permillage == 0 {
 			ns := ErrNotStarted
 			return StatePaused, &ns
 		}
 		return StatePaused, nil
-	case "active", "running":
+	case "stopped":
+		// ★R-2：双义必须按三条判据分流，顺序不可颠倒（先看错误，再看完成度）。
+		if ec != nil {
+			return StateFailedTerminal, ec
+		}
+		if permillage >= 1000 {
+			return StateCompleted, nil
+		}
+		if permillage <= 0 {
+			ns := ErrNotStarted
+			return StatePaused, &ns
+		}
+		return StatePaused, nil
+	case "active", "running", "downloading", "hashing", "checking":
 		return StateRunning, nil
-	case "waiting", "queued":
+	case "waiting", "queued", "pending":
 		return StateQueued, nil
-	case "removed":
+	case "removed", "deleted":
 		return StateRemoved, nil
 	default:
 		return StateQueued, nil
 	}
+}
+
+// mapNodeError 把节点错误串归一成 `*ErrorClass`；"无错误"返回 nil。
+func mapNodeError(errorCode *string) *ErrorClass {
+	if errorCode == nil {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(*errorCode)) {
+	case "", "none", "ok", "0", "success":
+		return nil
+	}
+	mapped := MapErrorClass(*errorCode)
+	return &mapped
+}
+
+// nonNilClass 保证"节点说失败"时一定带回一个错误分类（未知也归 `unknown`）。
+func nonNilClass(ec *ErrorClass) *ErrorClass {
+	if ec != nil {
+		return ec
+	}
+	unknown := ErrUnknown
+	return &unknown
 }
 
 // MapErrorClass 把节点错误串归一到 `task.error_class` 的受约束取值集（DDL CHECK）。
@@ -154,4 +196,48 @@ func boolToInt64(b bool) int64 {
 		return 1
 	}
 	return 0
+}
+
+// DispatchView 派生对外的「派发视图」：`dispatched` 与 `dispatchState`。
+//
+// # 为什么它必须是派生的，而不是常量
+//
+// 调度内核落地前，这两个字段在管理台与 aria2 面都是**硬编码**
+// （`dispatched:false` / `dispatchState:"queued_no_node"`）—— 那时确实没有组件会下发，
+// 所以是诚实的。但内核落地后继续硬编码就成了**谎报**：
+// 任务明明已经落到 `node_id=1`、正在下载，界面上却写着"排队、未派发"。
+// 用户据此判断"没生效"，排障方向会完全跑偏。
+//
+// 判据以 `internal_state` 为主、`node_id` 为旁证：
+//   - `queued` + 无 node ⇒ `queued_no_node`（还没选到机器）
+//   - `queued` + 有 node ⇒ `queued_on_node`（已落点，节点侧在排队）
+//   - 其余按状态名直出
+func DispatchView(nodeID *int64, state InternalState) (dispatched bool, dispatchState string) {
+	dispatched = nodeID != nil
+	switch state {
+	case StateQueued:
+		if dispatched {
+			return true, "queued_on_node"
+		}
+		return false, "queued_no_node"
+	case StateDispatching:
+		return dispatched, "dispatching"
+	case StateRunning:
+		return dispatched, "running"
+	case StatePaused:
+		return dispatched, "paused"
+	case StateCompleted:
+		return dispatched, "completed"
+	case StateFailed, StateFailedTerminal:
+		return dispatched, "failed"
+	case StateRemoved:
+		return dispatched, "removed"
+	case StateStopped:
+		return dispatched, "stopped"
+	default:
+		if dispatched {
+			return true, "dispatched"
+		}
+		return false, "queued_no_node"
+	}
 }

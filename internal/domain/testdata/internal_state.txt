@@ -1,0 +1,11 @@
+completed
+deduplicated
+dispatching
+external
+failed_terminal
+missing_on_node
+orphaned
+paused
+queued
+removed
+running

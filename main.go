@@ -36,6 +36,7 @@ import (
 	"github.com/LIUBANGJIAN/download-gateway/internal/admin"
 	"github.com/LIUBANGJIAN/download-gateway/internal/adminpass"
 	"github.com/LIUBANGJIAN/download-gateway/internal/config"
+	"github.com/LIUBANGJIAN/download-gateway/internal/engine"
 	"github.com/LIUBANGJIAN/download-gateway/internal/handshake"
 	"github.com/LIUBANGJIAN/download-gateway/internal/ids"
 	"github.com/LIUBANGJIAN/download-gateway/internal/ingress"
@@ -110,7 +111,14 @@ func run() error {
 	)
 
 	// ── 安全告警（启动即显式告知风险，不静默）──────────────────────────────
-	slog.Warn("调度器与节点下发未实现（T03–T07 未落地）：任务只会入库排队，不会真正下载")
+	// 调度内核已落地（B1）。这里不再告警"不会下载"，改为如实报告开关状态 ——
+	// 用户最需要的不是"做完了"，而是"现在会不会真的下载"。
+	if !engine.SchedulerEnabledByEnv() {
+		slog.Warn("调度内核已被环境变量 DISPATCH_SCHEDULER 关闭：任务只会入库排队，不会下发")
+	} else {
+		slog.Info("调度内核已启用：排队任务会按亲和/评分选点并投递到 BitComet 节点；" +
+			"可用 DISPATCH_SCHEDULER=off 或 app_config.scheduler.enabled='off' 关闭")
+	}
 	if cfg.PublicToken == nil {
 		slog.Warn("对外口未配置 DISPATCH_PUBLIC_TOKEN：6800 无鉴权，任何可达者都能投递任务",
 			"addr", cfg.PublicAddr)
@@ -201,6 +209,19 @@ func run() error {
 	publicHandler := ingress.NewRouter(publicState, version)
 	adminHandler := admin.NewRouter(adminState, version)
 
+	// ── 调度内核（B1：选点 + 投递 + 回读）──────────────────────────────────
+	// 它必须在两端口起来**之后**启动：任务来源是对外口，先有入口再谈消费。
+	// ctx 在下方与信号绑定，这里先用一个可取消的父 ctx，取消点与 HTTP 一致。
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+
+	eng := engine.New(st, secrets, engine.DefaultConfig())
+	engineDone := make(chan struct{})
+	go func() {
+		defer close(engineDone)
+		eng.Run(runCtx)
+	}()
+
 	publicSrv := &http.Server{Addr: cfg.PublicAddr, Handler: publicHandler}
 	adminSrv := &http.Server{Addr: cfg.AdminAddr, Handler: adminHandler}
 
@@ -223,6 +244,12 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	// 信号 ctx 与调度 ctx 同步：先停业务，再停调度，避免"任务正在投递时库已关"。
+	go func() {
+		<-ctx.Done()
+		runCancel()
+	}()
+
 	select {
 	case <-ctx.Done():
 		slog.Info("收到中断信号，开始优雅退出")
@@ -237,6 +264,13 @@ func run() error {
 	}
 	if err := adminSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("管理端口关停异常", "err", err)
+	}
+
+	// 等调度循环真正退出（它可能在一次投递中，网络超时上限 30s 内必然返回）。
+	select {
+	case <-engineDone:
+	case <-time.After(shutdownTimeout):
+		slog.Warn("调度内核未在超时内退出，继续关闭")
 	}
 
 	slog.Info("已退出")

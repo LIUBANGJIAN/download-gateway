@@ -100,6 +100,37 @@ var rank = map[string]int{
 	"internal/handshake": 2,
 	"internal/session":   2,
 
+	// 层 0：选点内核（`scheduler`）。
+	//
+	// 登记理由：**纯决策**包，实测依赖只有标准库（`fmt`/`math`）。
+	// 它刻意不 import `domain`/`store`/`protocol` —— 一旦它开始读库或发网络，
+	// B1 的"同一输入必得同一选择"就无法单测。定层 0 让它无法反向依赖任何业务包。
+	"internal/scheduler": 0,
+
+	// 层 1：分组识别与建绑（`grouping`）。
+	//
+	// 登记理由：`key.go` 是纯函数（只用标准库），`bind.go` 依赖 `internal/domain`（层 0）
+	// 与 `database/sql`；**不**依赖 `store`（事务由调用方开好后传 `*sql.Tx` 进来）。
+	// 因此层 1 是"最紧且成立"的取值：`rank(domain)=0 < rank(grouping)=1`。
+	"internal/grouping": 1,
+
+	// 层 2：投递编排（`dispatch`）与回读同步（`sync`）。
+	//
+	// 登记理由（实测依赖集）：
+	//   - `dispatch`：`scheduler`(0) / `store`(0) / `domain`(0) / `protocol`(0) / `secret`(1)
+	//   - `sync`：`store`(0) / `domain`(0) / `protocol`(0) / `secret`(1)
+	// 两者最大被依赖层是 1（secret），故取 2。二者**互不依赖**：投递只管"发出去"，
+	// 同步只管"读回来"，谁也不该等谁。
+	"internal/dispatch": 2,
+	"internal/sync":     2,
+
+	// 层 3：驱动循环（`engine`）。
+	//
+	// 登记理由：它是唯一同时依赖 `dispatch`(2) 与 `sync`(2) 的包，故必须**严格更高**（3）。
+	// 它不 import `ingress`/`admin`：调度内核不认识 HTTP，只认识库与节点客户端 ——
+	// 这条边界让"把调度器拔掉"（`DISPATCH_SCHEDULER=off`）不会牵连协议面。
+	"internal/engine": 3,
+
 	// 层 3：两端口共享状态（只持有叶子包类型）。
 	"internal/state": 3,
 

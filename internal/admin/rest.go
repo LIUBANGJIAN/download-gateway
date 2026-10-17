@@ -327,6 +327,7 @@ func taskView(t *domain.TaskRow) map[string]any {
 	if t.TotalSize != nil {
 		total = *t.TotalSize
 	}
+	dispatched, dispatchState := domain.DispatchView(t.NodeID, t.InternalState)
 	return map[string]any{
 		"task_id":         t.TaskID,
 		"gid":             derefString(t.GID),
@@ -341,8 +342,8 @@ func taskView(t *domain.TaskRow) map[string]any {
 		"permillage":      t.Permillage,
 		"created_at":      t.CreatedAt,
 		"updated_at":      t.UpdatedAt,
-		"dispatched":      false,
-		"dispatch_state":  "queued_no_node",
+		"dispatched":      dispatched,
+		"dispatch_state":  dispatchState,
 	}
 }
 

@@ -112,12 +112,29 @@ const (
 	// StateStopped 停止 —— **双义**：既可能已完成、也可能已暂停、还可能带错误。
 	// 反解规则见 AriaStatus。
 	StateStopped InternalState = "stopped"
+	// StateFailedTerminal 终态失败（重试耗尽 / 4xx 不可恢复 / 节点报错）。
+	//
+	// 与 [StateFailed] 的区别：`failed` 是 Rust 时代的遗留值（Rust 侧
+	// `tasks/create.rs` 直接写裸串 `"failed"`），调度内核落地后**写路径一律用
+	// `failed_terminal`**（`design/02 §3.4` 的 11 值表正是这个值）。
+	// 保留 `failed` 只为读取侧等价（Rust 版仍可能写它），归并留后续。
+	//
+	// 为什么必须区分：`design/04 §10` 的 INV-A1 按 `failed_terminal` 排除终态；
+	// 若写 `failed`，失败任务会被误判成「本该在跑却没落节点」的违规。
+	StateFailedTerminal InternalState = "failed_terminal"
 )
 
-// allInternalStates 必须与 Rust 侧 `tasks::state::aria_status` 的 match 分支一一对应。
+// allInternalStates 的权威源是 `design/02 §3.4` 的 `task.internal_state` 值集表
+// （冻结在 `testdata/internal_state.txt`，由 `TestInternalStateMatchesFrozenSet` 逐值比对）。
+//
+// ⚠️ 历史注释曾写「必须与 Rust 侧一一对应」——**那是错的**：Rust 根本没有这个枚举
+// （裸 TEXT），把实现当权威会让扩值域时随手造值而全绿。
+//
+// 当前 9 值 = 冻结表的 11 值 − 4 个尚未落地的值（`orphaned`/`deduplicated`/
+// `missing_on_node`/`external`）+ 1 个 Rust 遗留值 `failed`。
 var allInternalStates = []InternalState{
 	StateQueued, StateDispatching, StateRunning, StatePaused,
-	StateCompleted, StateFailed, StateRemoved, StateStopped,
+	StateCompleted, StateFailed, StateFailedTerminal, StateRemoved, StateStopped,
 }
 
 // AllInternalStates 返回全部内部状态（副本）。
