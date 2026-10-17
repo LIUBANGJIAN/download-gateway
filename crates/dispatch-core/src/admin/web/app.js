@@ -92,7 +92,7 @@ function show(view) {
   if (view === 'overview') loadOverview();
   if (view === 'nodes') loadNodes();
   if (view === 'tasks') loadTasks();
-  if (view === 'settings') loadPolicies();
+  if (view === 'settings') { loadPolicies(); loadPasswordStatus(); }
 }
 
 // ═════════════════════════════ 总览 ═════════════════════════════
@@ -468,6 +468,52 @@ async function savePolicies() {
   }
 }
 
+// ── 管理口令（用户可自行设置）──────────────────────────────────────────────
+//
+// 只走两个接口：GET 读「来源 + 上次修改时刻」，POST 提交 {current, new}。
+// 口令从不出现在 URL / localStorage 里，输入框在提交成功后才清空。
+async function loadPasswordStatus() {
+  showErr('pw-error', null);
+  hideOk('pw-ok');
+  try {
+    const d = await api('/api/admin/password');
+    // 来源说明必须写准：改过一次后，环境变量里的初始口令就**不再有效**。
+    $('pw-note').textContent = d.customized
+      ? `当前口令由你在管理台设置（${d.min_length}–${d.max_length} 个字符），已落库；`
+        + `上次修改：${fmtTime(d.updated_at)}。部署时环境变量里的初始口令已不再生效。`
+      : `当前口令来自部署环境（环境变量或启动时随机生成），尚未在管理台改过。`
+        + `改过之后，环境变量里的初始口令将不再生效。`;
+  } catch (e) {
+    showErr('pw-error', `读取口令状态失败：${e.message}`);
+  }
+}
+
+async function savePassword() {
+  showErr('pw-error', null);
+  hideOk('pw-ok');
+  const current = $('pw-current').value;
+  const next = $('pw-new').value;
+  const confirm = $('pw-confirm').value;
+  if (!current) { showErr('pw-error', '请输入当前口令'); return; }
+  if (next !== confirm) { showErr('pw-error', '两次输入的新口令不一致'); return; }
+  try {
+    const d = await api('/api/admin/password', {
+      method: 'POST',
+      body: { current_password: current, new_password: next },
+    });
+    // 成功后才清空，失败保留输入（用户不必重打一遍）。
+    $('pw-current').value = '';
+    $('pw-new').value = '';
+    $('pw-confirm').value = '';
+    ok('pw-ok', d.sessions_revoked
+      ? '口令已修改，其它已登录会话已失效。'
+      : '口令已修改并立即生效。其它已登录的浏览器仍保持登录（按当前策略不强制下线）。');
+    loadPasswordStatus();
+  } catch (e) {
+    showErr('pw-error', `修改失败：${e.message}`);
+  }
+}
+
 function ok(id, msg) { const el = $(id); el.textContent = msg; el.hidden = false; }
 function hideOk(id) { $(id).hidden = true; }
 
@@ -490,6 +536,31 @@ async function doLogout() {
   show('login');
 }
 
+// 忘记口令：向服务端要一串一次性临时口令。
+//
+// ⚠️ 口令**不会**出现在这个页面的响应里 —— 服务端只把它写进日志，
+// 用户去宿主机 `docker logs <容器> | grep temp_password` 取。
+// 页面能做的只有「确认生成成功 + 告诉用户去哪看」，绝不能假装拿到了口令
+// （把口令回传就等于这个匿名接口可以给任何人发管理口令）。
+async function requestTempPassword() {
+  const btn = $('reset-request-btn');
+  const out = $('reset-request-result');
+  btn.disabled = true;
+  out.hidden = true;
+  try {
+    const d = await api('/api/admin/password/reset-request', { method: 'POST', body: {} });
+    const minutes = Math.max(1, Math.round((d.expires_in || 600) / 60));
+    out.hidden = false;
+    out.textContent = `已生成，${minutes} 分钟内有效。请在宿主机执行：${d.log_hint}`
+      + '（原口令仍然可用；改完口令后临时口令立即失效）';
+  } catch (e) {
+    out.hidden = false;
+    out.textContent = `生成失败：${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function init() {
   document.querySelectorAll('.nav-btn[data-view]').forEach((b) => {
     b.addEventListener('click', () => show(b.dataset.view));
@@ -498,6 +569,7 @@ function init() {
 
   $('logout-btn').addEventListener('click', doLogout);
   $('login-form').addEventListener('submit', doLogin);
+  $('reset-request-btn').addEventListener('click', requestTempPassword);
 
   // 节点
   $('node-refresh').addEventListener('click', loadNodes);
@@ -546,6 +618,7 @@ function init() {
   // 设置
   $('policy-refresh').addEventListener('click', loadPolicies);
   $('policy-save').addEventListener('click', savePolicies);
+  $('pw-save').addEventListener('click', savePassword);
 
   // 启动：先探测会话（summary），成功则进入目标页，否则回登录。
   const start = VIEWS[location.pathname] || 'overview';

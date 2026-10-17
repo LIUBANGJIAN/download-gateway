@@ -137,6 +137,53 @@ jobs:
           npm ci
           npm run build
 
+  # ---------- 1b) Go 实现的质量门 ----------
+  #
+  # 为什么必须独立成一个作业：Go 版是**后续主线**，且生产镜像（`Dockerfile-go`）
+  # 编译的就是它。在它出现之前，本文件里的门**只覆盖 Rust** —— 于是 Go 侧
+  # 60 个文件、十几条 e2e 全靠人工在构建机上跑，CI 一点都不知道。
+  # 「本地跑绿了」和「CI 会拦住回归」是两件事，差的正是这个作业。
+  go-test:
+    needs: secret-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # 跟着 go.mod 的 `go` 指令走。硬编码版本会与 Cargo 那边不同步：
+          # 升 go 指令时忘了改这里，CI 用的还是旧工具链（新语法直接编译失败）。
+          go-version-file: go.mod
+          cache: true
+
+      # gofmt 必须显式检查：Go 里「能编译」和「格式化过」是两件事，
+      # 而本仓库的惯例是格式一致。⚠️ 排除 `.probe/`（本机一次性探针脚本，
+      # 已被 .gitignore 覆盖，但 checkout 出来的工作区里不会有它，故这里只需兜底）。
+      - name: gofmt
+        run: |
+          set -uo pipefail
+          out="$(gofmt -l . | grep -v '^\.probe/' || true)"
+          if [ -n "$out" ]; then
+            echo "::error title=Go 格式未统一::以下文件需要 gofmt -w："
+            echo "$out"
+            exit 1
+          fi
+          echo "gofmt 检查通过"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./... -count=1
+
+      # -race 单独一步：它比普通测试慢 3–5 倍，放在同一步里会让失败信号
+      # 混在「到底是逻辑错还是竞态」之间。本仓库有多处 `sync.RWMutex`
+      # （临时口令表、握手令牌表、凭据热替换），竞态是真实风险面。
+      - name: go test -race
+        run: go test ./... -count=1 -race
+
   # ---------- 2) 发布条件判定 ----------
   #
   # 为什么要有这个 job：Docker Hub 凭据是**运行期配置**，不是代码。
@@ -148,11 +195,11 @@ jobs:
   #
   # 注意：secrets 不能直接用在 job 级 `if:` 里，故必须用这种「小 job 导出 output」的写法。
   gate:
-    needs: test
+    needs: [test, go-test]
     # ⚠️ 显式写 `needs.test.result` 而不是光写 `github.event_name != ...`：
     # 一旦 job 级写了 `if:`，它就会**替换掉** GitHub 原本隐式的 `success()` 门禁，
     # 于是「上游失败也照跑」。这类静默失守本项目踩过第二次（缺陷 D-13）。
-    if: ${{ !cancelled() && needs.test.result == 'success' && github.event_name != 'pull_request' }}
+    if: ${{ !cancelled() && needs.test.result == 'success' && needs.go-test.result == 'success' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     outputs:
       # ⚠️ 这里**只能**输出「不含 secret 派生」的值（缺陷 D-12）。
@@ -254,13 +301,14 @@ jobs:
   # 不用 QEMU 的原因（02 §5.2）：Rust 全量编译在仿真下要 40–90 分钟，
   # 而 ubuntu-24.04-arm 是原生 arm64 Runner，每格 5–8 分钟。
   build:
-    needs: [test, gate]
+    needs: [test, go-test, gate]
     # 不把 `needs.gate.result == 'success'` 写进来：gate 未过只意味着「不该推送」，
     # 而既定策略是**每次推送都构建一遍镜像**（验证 Dockerfile 每一层都成立），
     # 无凭据 / gate 未过只让推送降级，不让构建降级。上游 test 失败才该整体跳过。
     # 注意：job 级 `if:` 会**替换掉** GitHub 隐式的 `success()` 门禁，
     # 所以必须自己把 `needs.test.result` 写全（缺陷 D-13）。
-    if: ${{ !cancelled() && needs.test.result == 'success' && github.event_name != 'pull_request' }}
+    # `go-test` 同理：生产镜像编译的就是 Go 代码，它红了绝不能继续构建。
+    if: ${{ !cancelled() && needs.test.result == 'success' && needs.go-test.result == 'success' && github.event_name != 'pull_request' }}
     # ⚠️ 镜像名放在 **job 级 env**，而不是 job output：
     # ① 同一个 job 内使用 secret 不受 D-12 那条限制（所有 `docker/login-action` 都这么用）；
     # ② workflow 级 `env:` 取不到 `secrets` 上下文（D-11），只能写在这一层；
@@ -385,6 +433,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          # ⚠️ 生产镜像用 `Dockerfile-go`（Go 实现 + alpine 底座，约 27 MB）。
+          # 根 `Dockerfile` 是 Rust + debian 版（约 143 MB），保留作为对照与回退路径，
+          # 但**不再**是本流水线构建的对象 —— 否则推上 Docker Hub 的会是一个
+          # 与冒烟验证对象不同的、更大的镜像。
+          file: Dockerfile-go
           platforms: ${{ matrix.platform }}
           # 推送由 outputs 里的 `push=true` 控制 —— push-by-digest 必须用 `outputs` 形式，
           # 不能用 `push:` 快捷写法（那会退化成普通 tag 推送，拿不到逐架构 digest）。
@@ -393,11 +446,14 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 版本号在**编译期**注入二进制（见 Dockerfile 的 ARG/ENV 与
-          # crates/dispatch-core/src/lib.rs 的 option_env!）。缺了它会退化成
+          # 版本号在**编译期**注入二进制：`Dockerfile-go` 用
+          # `-ldflags "-X main.version=${APP_VERSION}"`。缺了它会退化成
           # `0.0.0-unknown`，冒烟断言会因此红 —— 属于刻意可见的失败。
           build-args: |
             APP_VERSION=${{ needs.gate.outputs.app_version }}
+            # GitHub Runner 在境外，用官方 proxy 即可；本机/内网构建用
+            # `--build-arg GOPROXY=https://goproxy.cn,direct` 覆盖。
+            GOPROXY=https://proxy.golang.org,direct
 
       # 把关键取值变成**公开可读的错误注解**。
       # 原因：Actions 作业日志通过 API 拉取需要管理员权限（未认证返回 403
@@ -523,8 +579,8 @@ jobs:
     # ⚠️ 必须**显式**依赖 merge：否则冒烟可能跑在 manifest 合并之前，
     # 去拉一个还不存在的 tag。所有 `needs` 都写全，是因为下面 job 级 `if:`
     # 会替换掉 GitHub 隐式的 `success()` 门禁（缺陷 D-13）。
-    needs: [test, gate, build, merge]
-    if: ${{ !cancelled() && needs.test.result == 'success' && github.event_name != 'pull_request' }}
+    needs: [test, go-test, gate, build, merge]
+    if: ${{ !cancelled() && needs.test.result == 'success' && needs.go-test.result == 'success' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     # 兜底超时：真出问题时不想让它挂到 GitHub 默认的 6 小时。
     timeout-minutes: 30
@@ -565,7 +621,9 @@ jobs:
           else
             echo "::notice title=未配置 Docker Hub 凭据::本次没有已发布镜像可用，改为本地构建源码镜像做冒烟（不推送）。"
           fi
-          docker build --build-arg APP_VERSION="${EXPECT_VERSION:-0.0.0-unknown}" -t smoke-local:ci .
+          # 必须与 build 作业用**同一个** Dockerfile，否则这条回退路径验的
+          # 是一个与发布产物不同的镜像 —— 那种「绿」比没有冒烟更危险。
+          docker build -f Dockerfile-go --build-arg APP_VERSION="${EXPECT_VERSION:-0.0.0-unknown}" -t smoke-local:ci .
           echo "ref=smoke-local:ci" >> "$GITHUB_OUTPUT"
           echo "mode=local" >> "$GITHUB_OUTPUT"
 

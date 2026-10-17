@@ -23,7 +23,6 @@ use super::{
     C_CSRF_INVALID, C_INTERNAL, C_NOT_FOUND, C_PRECONDITION_FAILED, C_TOO_MANY_REQUESTS,
     C_UNAUTHENTICATED, C_VALIDATION_ERROR, err, ok,
 };
-use crate::ingress::envelope;
 use crate::state::AdminState;
 use crate::tasks::query::{self, TaskListQuery};
 
@@ -63,7 +62,10 @@ pub async fn login(
         );
     }
 
-    if !envelope::ct_eq(&req.password, &st.policy.password) {
+    // 口令来源有两条路（见 `state::AdminCredential`）：库里存了 argon2id 哈希就走哈希校验，
+    // 否则退回与环境变量/随机口令做定长定时比较。**由 `AdminState` 统一决定**，
+    // 登录处不关心当前是哪一路 —— 否则「改过口令但登录仍比旧明文」会静默失效。
+    if !st.verify_admin_password(&req.password) {
         let count = st.guard.record_failure(ip, now);
         tracing::warn!(ip = %ip, failures = count, "管理登录失败");
         log_security(&st, now, "admin_login_failed", json!({ "failures": count })).await;

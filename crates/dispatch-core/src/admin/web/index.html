@@ -34,6 +34,16 @@
         <button type="submit" class="primary">登录</button>
       </form>
       <div id="login-error" class="error-bar" hidden></div>
+      <!-- 忘记口令：口令只进服务端日志，取口令需要宿主机的日志读权限。
+           这就是本产品的「身份证明」——不是邮箱、不是密保，而是容器控制权。 -->
+      <details class="forgot">
+        <summary>忘记口令？</summary>
+        <p class="hint">临时口令<b>只写在服务端日志里</b>，不会显示在本页面。生成后在宿主机执行：</p>
+        <p class="hint"><code>docker logs &lt;容器名&gt; | grep temp_password</code></p>
+        <p class="hint">默认 10 分钟内有效，用它登录后请立即到「设置」里改成自己的口令。原口令不会因此失效。</p>
+        <button type="button" id="reset-request-btn">生成临时口令</button>
+        <div id="reset-request-result" class="hint" hidden></div>
+      </details>
     </div>
   </section>
 
@@ -127,6 +137,28 @@
         </thead>
         <tbody id="policy-rows"></tbody>
       </table>
+    </div>
+
+    <!-- ---- 管理口令（用户可自行设置）---- -->
+    <div class="card" id="pw-card">
+      <h3>管理口令</h3>
+      <p class="hint" id="pw-note">正在读取当前口令来源…</p>
+      <div class="form-grid">
+        <label>当前口令
+          <input id="pw-current" type="password" autocomplete="current-password" />
+        </label>
+        <label>新口令（至少 10 个字符）
+          <input id="pw-new" type="password" autocomplete="new-password" />
+        </label>
+        <label>再输一次
+          <input id="pw-confirm" type="password" autocomplete="new-password" />
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button id="pw-save" class="primary">修改口令</button>
+      </div>
+      <div id="pw-error" class="error-bar" hidden></div>
+      <div id="pw-ok" class="ok-bar" hidden></div>
     </div>
 
     <details id="env-box" class="env-box">

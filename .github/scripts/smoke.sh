@@ -223,6 +223,33 @@ code="$(printf '%s' "$resp" | tail -1)"
 payload="$(printf '%s' "$resp" | sed '$d')"
 expect "POST ${PUB}/api/webui/ip_verify（握手第一步，无需凭据）" 200 "$code" "$payload"
 expect_contains "握手第一步返回 OK" "$payload" '"error_code":"OK"'
+# 必须明确说 bypass 不可用：真实客户端据此才会走第 2 段的口令登录。
+expect_contains "握手第一步明确拒绝 bypass" "$payload" '"bypass_eligible":false'
+
+# 5e. 握手第 2/3 段**必须存在**且能正确拒绝。
+# 这一段的失败模式是「路由没挂上 → 404」：客户端拿到 404 会一直重试、永远登不进来，
+# 而所有业务接口的断言依然是绿的（因为它们根本不走握手）。所以这里专门盯 404。
+# ⚠️ 只验「拒绝路径」：成功路径需要 RNCryptor 密文（口令是客户端自造的 client_id），
+#    curl 搓不出来 —— 那条由 Go 侧 `internal/ingress/webui_login_test.go` 的
+#    全链路用例覆盖（真加密、真解密、真换 device_token）。
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{"client_id":"smoke-client"}' "${PUB}/api/webui/login")"
+code="$(printf '%s' "$resp" | tail -1)"
+payload="$(printf '%s' "$resp" | sed '$d')"
+expect "POST ${PUB}/api/webui/login（缺 authentication）" 401 "$code" "$payload"
+expect_contains "握手登录缺密文时返回 INVALID_TOKEN" "$payload" "INVALID_TOKEN"
+
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{"client_id":"smoke-client","bypass":true}' "${PUB}/api/webui/login")"
+code="$(printf '%s' "$resp" | tail -1)"
+expect "POST ${PUB}/api/webui/login（尝试 bypass）" 400 "$code" "$(printf '%s' "$resp" | sed '$d')"
+
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{"invite_token":"deadbeef"}' "${PUB}/api/device_token/get")"
+code="$(printf '%s' "$resp" | tail -1)"
+payload="$(printf '%s' "$resp" | sed '$d')"
+expect "POST ${PUB}/api/device_token/get（伪造 invite）" 401 "$code" "$payload"
+expect_contains "伪造 invite 返回 INVALID_TOKEN" "$payload" "INVALID_TOKEN"
 
 echo
 echo "── 6. 管理口 · 登录 ────────────────────────────────────────────"

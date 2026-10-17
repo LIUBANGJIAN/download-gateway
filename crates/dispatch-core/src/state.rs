@@ -5,7 +5,7 @@
 //! `/healthz` 仍由 `main.rs` 拥有，两个 state 各提供 `store/started_at`，契约逐字节不变。
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::ids;
 use crate::ingress::handshake::HandshakeStore;
@@ -77,6 +77,37 @@ pub struct AdminState {
     pub secrets: Arc<crate::secret::SecretBox>,
     /// `DISPATCH_WEB_DIR`；`Some` 则从磁盘读页面（热改）。
     pub web_dir: Option<PathBuf>,
+    /// 管理口令的**当前凭据**（可热替换）。
+    ///
+    /// 为什么单独放一个 `RwLock` 而不塞进 `policy`：`policy` 是 `Arc<AdminPolicy>`
+    /// 且被多处只读共享，把口令塞进去就意味着「改一次密码要重建整个 policy」。
+    /// 这里只有一个字段会变，独立加锁最省事、影响面最小。
+    pub credential: RwLock<AdminCredential>,
+    /// 登录页「忘记口令 → 生成临时口令」的进程内状态（只活在内存，重启即失效）。
+    ///
+    /// 单独一个字段而不是塞进 [`AdminCredential`]：临时口令是**与真实口令并存**的
+    /// 第二凭据（见 `admin::selfreset` 模块文档），它有自己的 TTL 与频率限制，
+    /// 生命周期与 `credential` 无关，混进同一个 enum 会让「来源」判定变得含糊。
+    pub temp_code: Arc<crate::admin::selfreset::TempCode>,
+}
+
+/// 管理口令的当前凭据。
+#[derive(Clone, Debug)]
+pub enum AdminCredential {
+    /// 已落库的 argon2id PHC 串 —— 用户在管理台自己设过口令。
+    Hash(String),
+    /// 明文。仅两种来源：`DISPATCH_ADMIN_PASSWORD` 注入，或启动时随机生成。
+    Plain(String),
+}
+
+impl AdminCredential {
+    /// 该凭据的来源标识（暴露给 `GET /api/admin/password`，**不含口令本身**）。
+    pub fn source(&self) -> &'static str {
+        match self {
+            Self::Hash(_) => "database",
+            Self::Plain(_) => "environment",
+        }
+    }
 }
 
 impl AdminState {
@@ -89,6 +120,7 @@ impl AdminState {
         secrets: Arc<crate::secret::SecretBox>,
         web_dir: Option<PathBuf>,
     ) -> Arc<Self> {
+        let credential = AdminCredential::Plain(policy.password.clone());
         Arc::new(Self {
             store,
             started_at,
@@ -98,7 +130,48 @@ impl AdminState {
             env: Arc::new(env),
             secrets,
             web_dir,
+            credential: RwLock::new(credential),
+            temp_code: Arc::new(crate::admin::selfreset::TempCode::new()),
         })
+    }
+
+    /// 校验管理口令。
+    ///
+    /// 三条路径：
+    /// * `Hash` —— argon2id 校验（用户在管理台设过口令）；
+    /// * `Plain` —— 定长定时比较（环境变量/随机口令，只活在内存里）；
+    /// * 以上都不匹配时，再看**临时口令**（登录页自助找回，与真实口令并存）。
+    pub fn verify_admin_password(&self, input: &str) -> bool {
+        let matched = {
+            let guard = self.credential.read().unwrap_or_else(|e| e.into_inner());
+            match &*guard {
+                AdminCredential::Hash(phc) => crate::admin::password::verify_password(phc, input),
+                AdminCredential::Plain(pw) => crate::ingress::envelope::ct_eq(input, pw),
+            }
+        };
+        if matched {
+            return true;
+        }
+        // 临时口令排在最后：真实口令正确时不该为它多付一次内存锁的开销，
+        // 更不能出现「临时口令能过、真实口令过不了」的倒挂。
+        self.temp_code.verify(input, crate::ids::now_secs())
+    }
+
+    /// 替换当前凭据（改口令成功后调用）。
+    ///
+    /// 顺带**作废临时口令**：用户已经把口令改成自己记得住的串，那串一次性口令
+    /// 就没有存在理由了（它可能还躺在日志里，继续有效等于延长暴露窗口）。
+    pub fn set_credential(&self, next: AdminCredential) {
+        *self.credential.write().unwrap_or_else(|e| e.into_inner()) = next;
+        self.temp_code.clear();
+    }
+
+    /// 当前凭据来源：`database` / `environment`。
+    pub fn password_source(&self) -> &'static str {
+        self.credential
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .source()
     }
 }
 

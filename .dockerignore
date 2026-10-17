@@ -1,5 +1,6 @@
 # 构建上下文瘦身：只把编译必需的东西送进去
 target/
+target-musl/
 .git/
 .github/
 data/
@@ -13,5 +14,7 @@ doc/
 *.db
 *.db-wal
 *.db-shm
+*.token.txt
+ERROR
 .DS_Store
 Thumbs.db

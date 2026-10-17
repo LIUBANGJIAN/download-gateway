@@ -20,6 +20,7 @@
 
 mod config;
 
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -47,7 +48,17 @@ async fn healthz_admin(State(s): State<Arc<AdminState>>) -> Response {
 
 fn init_tracing(level: &str) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // ⚠️ ANSI 只给**终端**。
+    //
+    // `tracing_subscriber::fmt()` 的 `ansi` 默认是 `true`，它不看输出端是不是终端 ——
+    // 于是重定向到文件/管道时也会写转义码。后果不是「难看」而是**取不到东西**：
+    // 一行日志实际是 `temp_password` + `ESC[0mESC[2m` + `=` + `ESC[0m` + 口令，
+    // 用户按 README 敲 `grep temp_password=` 会**一条都匹配不到**（`docker logs` 同理）。
+    // 这也是所有「靠 grep 日志做运维」的工具都会踩的坑，统一在入口关掉。
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(std::io::stdout().is_terminal())
+        .init();
 }
 
 /// 解析代理自身的稳定 client_id（走 `bitcomet_api::clientid` 文件机制，不落库）。
@@ -71,10 +82,190 @@ fn is_loopback(addr: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1")
 }
 
+/// 重置管理口令的子命令名（与 Go 侧 `ResetPasswordCmd` 逐字一致）。
+const RESET_PASSWORD_CMD: &str = "reset-password";
+
+/// 无子命令时的总用法（`download-gateway help` / `--help`）。
+const MAIN_USAGE: &str = "\
+用法：
+  download-gateway                    启动服务（读环境变量，监听对外口与管理口）
+  download-gateway reset-password     重置管理口令（忘记口令时的补救路径，详见 --help）
+  download-gateway help               显示本说明
+";
+
+/// `reset-password --help` 的用法说明。
+const RESET_USAGE: &str = "\
+用法：
+  download-gateway reset-password                    生成随机口令并写入数据库（推荐）
+  download-gateway reset-password --password <新口令>  指定新口令（10–128 个字符）
+  download-gateway reset-password --clear             清除口令，回退到 DISPATCH_ADMIN_PASSWORD / 启动时随机口令
+
+说明：
+  口令只写入 DISPATCH_DB 指向的数据库（默认 data/dispatch.db），不打印旧口令、也无法反推旧口令。
+  命令本身不会重启服务；**改完必须重启**，运行中的进程才会重新读取口令。
+";
+
+/// `reset-password` 子命令：**忘记管理口令时的唯一合法补救路径**。
+///
+/// # 为什么必须有它
+///
+/// 口令一旦在管理台改过，库里留下的是 argon2id 哈希，启动时 [`main`] 读到它就会
+/// 明确不再校验 `DISPATCH_ADMIN_PASSWORD`。哈希不可逆 —— 忘了就是死锁：
+/// 登不进去、改不了、连界面上的「改口令」卡片都够不着。
+///
+/// 在此之前唯一的土办法是拿外部工具改 `dispatch.db`：运行镜像基于 alpine、
+/// 以 uid 10001 运行、**不带 sqlite3**，于是「拷出来 → 找台有 sqlite 的机器 →
+/// 删两行 → 拷回去」成了唯一出路，或者删库重来（任务、节点、审计全丢）。
+///
+/// # 为什么是子命令而不是界面上的「忘记密码」
+///
+/// 自托管网关没有邮箱、没有短信、没有第二个管理员 —— 能证明「你是主人」的东西
+/// 只剩下**宿主机控制权**。能 `docker exec` / 能改 compose 的人本来就能改库、换镜像、
+/// 删卷，所以把恢复能力放在这里不降低安全性；反过来，任何不依赖宿主机控制权的
+/// 自助恢复（密保问题之类）都会额外长出一个可被攻击的面。
+///
+/// # ⚠️ 生效需要重启
+///
+/// 本命令直接改库，**不通知**正在运行的服务进程 —— 那个进程的凭据在内存里，
+/// 不会察觉库变了。所以输出末尾必须明确要求重启；不写这句，用户会以为命令没生效，
+/// 然后开始怀疑口令、怀疑大小写、怀疑输入法。
+///
+/// 行为、参数、输出结构、审计文案与 Go 侧 `resetcmd.go` 保持一致：
+/// 两个实现对同一个 `dispatch.db` 必须能互相接管。
+async fn reset_password_cmd(cfg: &Config, args: &[String]) -> Result<()> {
+    let mut new_password: Option<String> = None;
+    let mut clear_only = false;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        match arg {
+            "-h" | "--help" => {
+                print!("{}", RESET_USAGE);
+                return Ok(());
+            }
+            "-c" | "--clear" => {
+                clear_only = true;
+                i += 1;
+            }
+            "-password" | "--password" => {
+                let value = args
+                    .get(i + 1)
+                    .with_context(|| format!("{arg} 需要一个值"))?;
+                new_password = Some(value.clone());
+                i += 2;
+            }
+            _ if arg.starts_with("--password=") => {
+                new_password = Some(arg["--password=".len()..].to_string());
+                i += 1;
+            }
+            _ if arg.starts_with("-password=") => {
+                new_password = Some(arg["-password=".len()..].to_string());
+                i += 1;
+            }
+            other => anyhow::bail!("无法识别的参数 {other:?}（本命令只接受 --password / --clear）"),
+        }
+    }
+
+    if clear_only && new_password.is_some() {
+        anyhow::bail!("--clear 与 --password 不能同时使用：一个要清空、一个要写入");
+    }
+    // 格式先校验，**在打开数据库之前** —— 口令太短这种纯输入错误不该产生任何副作用。
+    if let Some(pw) = &new_password {
+        dispatch_core::admin::password::validate_new(pw, "").map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+    // 先看库在不在：`Store::open` 会顺手建库，在「路径打错」的情况下静默造出一个空库，
+    // 然后用户以为重置成功了，其实改的是另一个文件。
+    if !cfg.db_path.exists() {
+        anyhow::bail!(
+            "数据库 {} 不存在：请先启动一次服务完成初始化，或检查 DISPATCH_DB",
+            cfg.db_path.display()
+        );
+    }
+    let store = Store::open(&cfg.db_path)
+        .with_context(|| format!("打开数据库 {} 失败", cfg.db_path.display()))?;
+    let now = dispatch_core::ids::now_secs();
+
+    if clear_only {
+        dispatch_core::admin::password::clear_hash(&store)
+            .await
+            .context("清除口令哈希失败")?;
+        audit_password_reset(
+            &store,
+            now,
+            "管理口令已通过命令行清除（reset-password --clear）",
+        )
+        .await;
+        println!("已清除数据库 {} 中的管理口令。\n", cfg.db_path.display());
+        println!("重启后生效：");
+        println!("  · 若设置了 DISPATCH_ADMIN_PASSWORD → 用该口令登录；");
+        println!("  · 若未设置 → 启动时随机生成，并打印在启动日志里（每次重启都会变）。");
+        println!("\n重启命令：docker restart <容器名>   或   systemctl restart download-gateway");
+        return Ok(());
+    }
+
+    let (password, generated) = match new_password {
+        Some(p) => (p, false),
+        // 与启动时的随机口令同源（`ids::new_hex_128` = 16 字节随机 → 32 位小写 hex），
+        // 不另造一套字符集：同一个产品里出现两种「随机口令长相」只会让用户更迷惑。
+        None => (dispatch_core::ids::new_hex_128(), true),
+    };
+    let phc = dispatch_core::admin::password::hash_password(&password)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    dispatch_core::admin::password::save_hash(&store, &phc, now)
+        .await
+        .context("保存口令哈希失败")?;
+    audit_password_reset(&store, now, "管理口令已通过命令行重置（reset-password）").await;
+
+    println!("管理口令已重置。");
+    if generated {
+        println!("  新口令（随机生成）：{password}");
+        println!("  ⚠️ 这串口令只在这里显示一次，请立刻保存到密码管理器。");
+    } else {
+        println!("  新口令：使用你通过 --password 指定的那一串（本命令不回显）。");
+    }
+    println!(
+        "  写入位置：{}（app_config.{}）\n",
+        cfg.db_path.display(),
+        dispatch_core::admin::password::KEY_HASH
+    );
+    println!("⚠️ 正在运行的服务仍持有旧口令：必须重启才生效。");
+    println!("   容器部署：docker restart <容器名>");
+    println!("   裸机部署：systemctl restart download-gateway");
+    println!("   重启后环境变量 DISPATCH_ADMIN_PASSWORD 不再参与校验（库里已有新口令）。");
+    Ok(())
+}
+
+/// 写一条「口令被离线改过」的安全审计。
+///
+/// 具体 SQL 放在 `dispatch-core` 里（[`dispatch_core::admin::password::log_security_audit`]），
+/// 根 crate 不为一条 INSERT 去依赖 `rusqlite`。
+async fn audit_password_reset(store: &Store, now: i64, message: &str) {
+    dispatch_core::admin::password::log_security_audit(store, now, message, "warn").await;
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cfg = Config::from_env()?;
     init_tracing(&cfg.log_level);
+
+    // ── 子命令分流 ────────────────────────────────────────────────────────
+    // `reset-password` 只碰数据库、不绑端口，必须在起监听之前处理。
+    // 未知子命令**直接报错**而不是忽略：手误（如 `restar`）会静默起一个抢端口的服务，
+    // 排查成本远高于一句报错。
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(first) = argv.first() {
+        match first.as_str() {
+            RESET_PASSWORD_CMD => return reset_password_cmd(&cfg, &argv[1..]).await,
+            "-h" | "--help" | "help" => {
+                print!("{}", MAIN_USAGE);
+                return Ok(());
+            }
+            other => {
+                eprintln!("download-gateway: 未知子命令 {other:?}\n\n{MAIN_USAGE}");
+                std::process::exit(2);
+            }
+        }
+    }
 
     tracing::info!(
         version = dispatch_core::VERSION,
@@ -174,6 +365,23 @@ async fn main() -> Result<()> {
         env,
         secrets,
         cfg.web_dir.clone(),
+    );
+
+    // 管理口令的**实际来源**：库里用户自设的 argon2id 哈希 > 环境变量 > 启动时随机生成。
+    // 只在这里读一次；之后「在管理台改口令」走 `set_credential` 热替换，无需重启。
+    // 注意顺序不能反：若先信任环境变量，用户改过的口令会被部署参数悄悄覆盖回去。
+    if let Some(phc) = dispatch_core::admin::password::load_hash(&store).await {
+        tracing::info!("检测到已在管理台设置的口令，环境变量中的初始口令不再参与校验");
+        // `store` 与 admin_state 里的那份是同一条连接池，读到的就是同一个库。
+        admin_state.set_credential(dispatch_core::state::AdminCredential::Hash(phc));
+    }
+    // 一句兜底提示：口令一旦改过就无法从库反推，忘了只能走这两条路。
+    // 放在启动日志里（而不是界面里），是因为「忘记口令的人根本进不了界面」。
+    // 首选轻的那条（登录页按钮 + 本日志取码），`reset-password` 是拿不到日志时的兜底。
+    tracing::info!(
+        "忘记管理口令时：登录页「忘记口令？」可生成一次性临时口令（只写在本日志里，\
+         用 `docker logs <容器名> | grep temp_password` 取）；\
+         日志拿不到或在裸机上，用 `download-gateway reset-password`（改完需重启）"
     );
 
     // ── 组装（业务路由来自 dispatch-core；/healthz 仍由 main 拥有）─────────

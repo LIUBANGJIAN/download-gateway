@@ -16,8 +16,10 @@
 
 pub mod config;
 pub mod nodes;
+pub mod password;
 pub mod policy;
 pub mod rest;
+pub mod selfreset;
 pub mod session;
 pub mod web;
 
@@ -84,6 +86,22 @@ pub fn router() -> Router<Arc<AdminState>> {
         // ---- 会话 ----
         .route("/api/admin/login", post(rest::login))
         .route("/api/admin/logout", post(rest::logout))
+        // ---- 管理口令（用户可自行设置）----
+        // GET 只回「来源 + 上次修改时刻」，绝不回口令本身；
+        // POST 要求已登录 + CSRF + **旧口令正确**，改完立即生效。
+        .route(
+            "/api/admin/password",
+            get(password::password_status).post(password::change_password),
+        )
+        // ---- 忘记口令的自助找回（**匿名**）----
+        // 生成一次性临时口令并**只写日志**，响应里没有口令本身。
+        // 匿名是它的前提（用户进不去登录页才需要它），安全性建立在
+        // 「能读日志 = 能控制容器」这条链上，详见 selfreset 模块文档。
+        // 关闭时返回 404（不暴露「有功能但被禁用」）。
+        .route(
+            "/api/admin/password/reset-request",
+            post(selfreset::request_temp_password),
+        )
         // ---- 总览 ----
         .route("/api/admin/summary", get(rest::summary))
         // ---- 任务：只读 + 干预，**没有创建** ----

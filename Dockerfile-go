@@ -1,0 +1,80 @@
+# ============================================================
+# download-gateway · Go 版镜像（alpine 底座）
+# ------------------------------------------------------------
+# 与同目录 `Dockerfile`（Rust 版，Debian 底座）的分工：
+#   · `Dockerfile`     → 当前**线上**镜像，CI 的 docker 作业构建它；
+#   · `Dockerfile-go` → Go 重构版镜像，本轮接线后用于验证业务链路。
+#      ⚠️ 文件名**刻意不以 `.go` 结尾**：模块根目录下任何 `*.go` 都会被 Go 工具链
+#      当成源码参与编译，叫 `Dockerfile.go` 会直接报 `illegal character U+0023 '#'`。
+#
+# 为什么用 alpine 而不是 debian-slim：
+#   ① 运行环境从 83.7MB 降到 12.5MB（镜像体积主要就是这个差）；
+#   ② 业务检查只需 `wget`（busybox 自带）即可做 HEALTHCHECK，
+#      不必像 Debian 那样为了一个探针再装 curl + ca-certificates（约 14.6MB）；
+#   ③ 根证书不需要：`webpki-roots` 已编进二进制（Cargo.lock 有、未见
+#      `rustls-native-certs`），Go 版同理走内置根证书。
+#
+# 关键点（与 Rust 版逐条对齐，部署契约不变）：
+#   ① `CGO_ENABLED=0` 静态编译 ⇒ 换底座不挑 glibc；② 非 root（uid 10001）；
+#   ③ `VOLUME /data` 持久化 SQLite；④ `HEALTHCHECK` 打管理口 `/healthz`；
+#   ⑤ 两端口 `EXPOSE`；⑥ 迁移脚本随镜像分发；⑦ 版本号编译期注入。
+# ============================================================
+
+# ---------- 阶段 1：Go 构建 ----------
+FROM golang:1.27-alpine AS build
+WORKDIR /src
+
+# 先只拷依赖清单：依赖不变时复用缓存层，改代码不必重下依赖。
+COPY go.mod go.sum ./
+
+# 模块代理可被覆盖：CI 在 GitHub 上走官方源即可；国内构建机常需换 `goproxy.cn`。
+# 写成 ARG 而不是硬编码 ENV —— 否则等于把一个地区的网络约定焊进镜像。
+ARG GOPROXY=https://proxy.golang.org,direct
+ARG GOSUMDB=sum.golang.org
+ENV GOPROXY=${GOPROXY} GOSUMDB=${GOSUMDB}
+
+RUN go mod download
+
+COPY . .
+
+# ⚠️ 默认值刻意写成 `0.0.0-unknown` 而不是 `0.1.0`：让「忘了传 build-arg」
+# 这件事**可见**（版本号断言会因此红），而不是悄悄退化成看起来正常的版本号。
+ARG APP_VERSION=0.0.0-unknown
+
+# `-trimpath` 去掉构建机路径（可复现）；`-s -w` 去符号表；版本号在链接期注入。
+RUN CGO_ENABLED=0 GOOS=linux go build \
+      -trimpath -ldflags "-s -w -X main.version=${APP_VERSION}" \
+      -o /out/download-gateway .
+
+# ---------- 阶段 2：alpine 运行镜像 ----------
+FROM alpine:3.22 AS runtime
+
+# 非 root 用户 + 可写的 /data（`VOLUME` 匿名卷默认 root 属主，不 chown 会直接崩）。
+RUN adduser -D -u 10001 -h /data app \
+ && mkdir -p /data /opt/download-gateway \
+ && chown -R app:app /data /opt/download-gateway
+
+COPY --from=build /out/download-gateway /usr/local/bin/download-gateway
+# 迁移脚本随镜像分发：容器启动时按 DISPATCH_MIGRATIONS 读取并应用。
+COPY --from=build /src/migrations /opt/download-gateway/migrations
+
+VOLUME ["/data"]
+ENV DISPATCH_DB=/data/dispatch.db \
+    DISPATCH_MIGRATIONS=/opt/download-gateway/migrations \
+    DISPATCH_PUBLIC_ADDR=0.0.0.0:6800 \
+    DISPATCH_ADMIN_ADDR=0.0.0.0:8080
+
+EXPOSE 6800 8080
+
+# busybox 自带 wget，无需额外装 curl（这是 alpine 相对 debian-slim 的主要收益之一）。
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -q -O- http://127.0.0.1:8080/healthz || exit 1
+
+USER app
+
+# 运行阶段可见的 OCI 版本标签（`docker inspect` 直接可读）。
+# `--build-arg` 只对该阶段已声明的 ARG 生效，故这里要重新声明一次。
+ARG APP_VERSION=0.0.0-unknown
+LABEL org.opencontainers.image.version="${APP_VERSION}"
+
+ENTRYPOINT ["download-gateway"]

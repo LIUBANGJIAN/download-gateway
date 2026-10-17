@@ -26,6 +26,11 @@ reqwest.workspace = true
 # getrandom 版本必须与 crates/bitcomet-api 一致（0.4 已把 API 改名为 `getrandom::fill`）。
 # 若误写 0.2，会因 `getrandom::getrandom` 不存在而编译失败。
 getrandom = "0.4"
+# 管理口令的哈希与校验（argon2id，PHC 串 `$argon2id$v=19$m=19456,t=2,p=1$...`）。
+# ⚠️ 刻意关掉默认的 `rand` feature：其 `OsRng` 会拖进 rand_core 0.6 / getrandom 0.2，
+# 与本项目固定的 getrandom 0.4 并存（能用但多一份依赖）。盐由本文件用 getrandom 0.4
+# 自己生成后交给 `SaltString::encode_b64`，两边版本一致、依赖树不膨胀。
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 tempfile = "3"

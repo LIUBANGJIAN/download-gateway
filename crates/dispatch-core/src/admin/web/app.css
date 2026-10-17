@@ -153,6 +153,12 @@ h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 20px 0 8px;
   margin-bottom: 12px;
 }
 
+/* 「忘记口令」折叠块：登录卡片里的次要入口，默认收起，不抢主流程的视觉权重。 */
+.forgot { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.forgot summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.forgot summary:hover { color: var(--accent); }
+.forgot .hint { margin: 8px 0; }
+
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .nowrap { white-space: nowrap; }
 .muted { color: var(--muted); }
