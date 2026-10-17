@@ -130,8 +130,14 @@ const (
 // ⚠️ 历史注释曾写「必须与 Rust 侧一一对应」——**那是错的**：Rust 根本没有这个枚举
 // （裸 TEXT），把实现当权威会让扩值域时随手造值而全绿。
 //
-// 当前 9 值 = 冻结表的 11 值 − 4 个尚未落地的值（`orphaned`/`deduplicated`/
-// `missing_on_node`/`external`）+ 1 个 Rust 遗留值 `failed`。
+// 当前 9 值 = 冻结表 ∩ Go 的 7 值（queued/dispatching/running/paused/completed/
+// failed_terminal/removed）+ 2 个 Rust 遗留值（`failed`/`stopped`）。
+// 冻结表另有 4 个尚未落地的值：`orphaned`/`deduplicated`/`missing_on_node`/`external`
+// （白名单，见 frozen_states_test.go）。
+//
+// ⚠️ `stopped` 不在 v2 冻结表里：它被拆成了 `paused` 与 `failed_terminal` 两支
+// （判据是 `errorCode`，见 `ClassifyNodeStatus`）。保留它只为读得懂存量数据，
+// **不是**新代码可以写入的值。
 var allInternalStates = []InternalState{
 	StateQueued, StateDispatching, StateRunning, StatePaused,
 	StateCompleted, StateFailed, StateFailedTerminal, StateRemoved, StateStopped,

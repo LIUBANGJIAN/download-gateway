@@ -304,7 +304,12 @@ home="$(curl -s --max-time 10 "${ADM}/")"
 for view in overview nodes tasks settings; do
   expect_contains "管理台导航含 data-view=${view}" "$home" "data-view=\"${view}\""
 done
-expect_contains "首页横幅明说调度未启用" "$home" "仅受理任务"
+# 首页横幅必须如实反映**当前**的调度状态。B1 落地前这里锁的是「仅受理任务」，
+# 现在锁的是反过来的事实 —— ⚠️ 别因为「断言红了」就删掉它：
+# 它守的正是「界面不许谎报调度状态」这条产品原则，方向变了、原则没变。
+expect_contains "首页横幅声明调度已启用" "$home" "调度与下发已启用"
+expect_absent "首页横幅不得再声称只受理任务" "$home" "仅受理任务"
+expect_absent "首页横幅不得再声称不会真正下载" "$home" "不会真正下载"
 # 导航里**不得**出现「新增任务」按钮（产品原则，见 README「职责边界」）。
 # ⚠️ 这里刻意**不**断言「不能出现『添加任务』四个字」：任务页的说明文字里
 #    恰好有一句「管理台**不提供**添加任务」—— 按字面禁词写，会把**正确的文案**判成违规。

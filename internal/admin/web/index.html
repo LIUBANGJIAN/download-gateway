@@ -7,9 +7,11 @@
   <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
-  <!-- 启动横幅：调度内核未落地，务必让用户一眼看到「任务只是被受理，并未真正下载」 -->
+  <!-- 启动横幅：如实告知调度状态。B1 已落地，横幅改为「已启用」的说法；
+       若被 DISPATCH_SCHEDULER=off 关掉，总览页的 env 快照会显示出来。 -->
   <div id="banner" class="banner" role="status">
-    本轮仅受理任务，调度 / 下发尚未启用 —— 任务停在排队状态，不会真正下载。
+    调度与下发已启用（B1）：任务会自动选点、投递到 BitComet 节点，进度每 15 秒回读。
+    节点需为「在线」才会被选中（新节点请在「节点」页点一次探测）。
   </div>
 
   <header class="topbar">
@@ -243,7 +245,7 @@
       </label>
       <p class="hint">
         不勾选时<b>只删除网关侧的任务记录</b>，节点上的文件保持原样 —— 这是默认行为，也是最安全的。
-        勾选后网关会向节点下发删除；当前调度内核尚未落地，因此若节点侧没有文件记录，网关会<b>明确报错</b>而不是假装成功。
+        勾选后网关会向节点下发删除；若节点侧没有该任务的文件记录，网关会<b>明确报错</b>而不是假装成功。
       </p>
       <div id="taskdel-error" class="error-bar" hidden></div>
       <div class="dialog-actions">

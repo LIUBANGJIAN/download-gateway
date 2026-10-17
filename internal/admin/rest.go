@@ -233,7 +233,7 @@ func (s *adminServer) runAction(w http.ResponseWriter, r *http.Request, id, acti
 				return
 			}
 			fail(w, http.StatusUnprocessableEntity, CodeValidationError,
-				"无法删除节点文件：本任务在节点侧没有文件记录（调度/下发尚未落地）。若只想移除网关侧的任务记录，请不要勾选『同时删除节点上的文件』。")
+				"无法删除节点文件：本任务在节点侧没有文件记录（任务尚未落点，或节点上已被移除）。若只想移除网关侧的任务记录，请不要勾选『同时删除节点上的文件』。")
 			return
 		}
 		// 管理台的「删除」是运维动作：**硬删**整行（与 aria2 的软删语义不同，有意为之）。
