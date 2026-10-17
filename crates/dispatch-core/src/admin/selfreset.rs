@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn issue_then_verify() {
         let t = TempCode::new();
-        let (code, ttl) = t.issue(1000, "10.0.0.1", DEFAULT_TEMP_TTL).unwrap();
+        let (code, ttl) = t.issue(1000, "198.51.100.1", DEFAULT_TEMP_TTL).unwrap();
         assert_eq!(ttl, DEFAULT_TEMP_TTL);
         assert!(t.verify(&code, 1000));
         assert!(!t.verify("", 1000));
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn expiry_boundary() {
         let t = TempCode::new();
-        let (code, ttl) = t.issue(1000, "10.0.0.1", 600).unwrap();
+        let (code, ttl) = t.issue(1000, "198.51.100.1", 600).unwrap();
         assert!(t.verify(&code, 1000 + ttl), "到期那一秒应仍可用");
         assert!(!t.verify(&code, 1000 + ttl + 1));
         assert!(!t.active(1000 + ttl + 1));
@@ -364,8 +364,8 @@ mod tests {
     #[test]
     fn only_latest_survives() {
         let t = TempCode::new();
-        let (a, _) = t.issue(1000, "10.0.0.1", 600).unwrap();
-        let (b, _) = t.issue(2000, "10.0.0.2", 600).unwrap();
+        let (a, _) = t.issue(1000, "198.51.100.1", 600).unwrap();
+        let (b, _) = t.issue(2000, "198.51.100.2", 600).unwrap();
         assert_ne!(a, b);
         assert!(!t.verify(&a, 2000), "旧串必须失效");
         assert!(t.verify(&b, 2000));
@@ -375,11 +375,11 @@ mod tests {
     #[test]
     fn per_ip_cooldown() {
         let t = TempCode::new();
-        t.issue(1000, "10.0.0.1", 600).unwrap();
-        let err = t.issue(1030, "10.0.0.1", 600).unwrap_err();
+        t.issue(1000, "198.51.100.1", 600).unwrap();
+        let err = t.issue(1030, "198.51.100.1", 600).unwrap_err();
         assert_eq!(err, IssueError::TooFrequent(30), "应为剩余冷却秒数");
         assert!(
-            t.issue(1000 + TEMP_PER_IP_COOLDOWN, "10.0.0.1", 600)
+            t.issue(1000 + TEMP_PER_IP_COOLDOWN, "198.51.100.1", 600)
                 .is_ok()
         );
     }
@@ -389,24 +389,27 @@ mod tests {
     fn global_rate_limit() {
         let t = TempCode::new();
         for i in 0..TEMP_GLOBAL_MAX {
-            t.issue(1000 + i as i64, &format!("10.0.0.{i}"), 600)
+            t.issue(1000 + i as i64, &format!("198.51.100.{i}"), 600)
                 .unwrap_or_else(|e| panic!("第 {i} 次不该被限流（{e:?}）"));
         }
-        match t.issue(1005, "10.0.0.99", 600) {
+        match t.issue(1005, "198.51.100.99", 600) {
             Err(IssueError::TooFrequent(retry)) => {
                 assert!(retry > 0, "应给出建议重试秒数，实际 {retry}");
             }
             other => panic!("第 6 次应被全局限流，实际 {other:?}"),
         }
         // 最早那次滑出窗口后就能再生成。
-        assert!(t.issue(1000 + TEMP_GLOBAL_WINDOW, "10.0.0.99", 600).is_ok());
+        assert!(
+            t.issue(1000 + TEMP_GLOBAL_WINDOW, "198.51.100.99", 600)
+                .is_ok()
+        );
     }
 
     /// `clear` 后立刻失效（改口令时走这条）。
     #[test]
     fn clear_kills_code() {
         let t = TempCode::new();
-        let (code, _) = t.issue(1000, "10.0.0.1", 600).unwrap();
+        let (code, _) = t.issue(1000, "198.51.100.1", 600).unwrap();
         t.clear();
         assert!(!t.verify(&code, 1001));
         assert!(!t.active(1001));
@@ -416,7 +419,7 @@ mod tests {
     #[test]
     fn default_is_usable() {
         let t = TempCode::default();
-        let (code, _) = t.issue(1000, "10.0.0.1", 600).unwrap();
+        let (code, _) = t.issue(1000, "198.51.100.1", 600).unwrap();
         assert!(t.verify(&code, 1000));
     }
 }

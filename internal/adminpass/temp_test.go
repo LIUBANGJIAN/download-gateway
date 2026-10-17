@@ -54,7 +54,7 @@ func TestTempCodeCoexistsWithRealPassword(t *testing.T) {
 	now := int64(1_000)
 	c := newTestCredential(&now)
 
-	code, ttl, err := c.IssueTemp(now, "192.168.1.10", DefaultTempTTL)
+	code, ttl, err := c.IssueTemp(now, "203.0.113.10", DefaultTempTTL)
 	if err != nil {
 		t.Fatalf("生成失败: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestTempCodeCoexistsWithRealPassword(t *testing.T) {
 	}
 
 	// 再生成一串（换 IP 绕开冷却）⇒ 旧串立即失效，任何时刻只允许一串有效。
-	second, _, err := c.IssueTemp(now+5, "192.168.1.11", DefaultTempTTL)
+	second, _, err := c.IssueTemp(now+5, "203.0.113.11", DefaultTempTTL)
 	if err != nil {
 		t.Fatalf("第二次生成失败: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestTempCodeCoexistsWithRealPassword(t *testing.T) {
 func TestTempCodeExpires(t *testing.T) {
 	now := int64(1_000)
 	c := newTestCredential(&now)
-	code, _, err := c.IssueTemp(now, "192.168.1.10", 600)
+	code, _, err := c.IssueTemp(now, "203.0.113.10", 600)
 	if err != nil {
 		t.Fatalf("生成失败: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestTempCodeExpires(t *testing.T) {
 func TestTempCodeExpiryBoundary(t *testing.T) {
 	now := int64(1_000)
 	c := newTestCredential(&now)
-	code, _, err := c.IssueTemp(now, "192.168.1.10", 60)
+	code, _, err := c.IssueTemp(now, "203.0.113.10", 60)
 	if err != nil {
 		t.Fatalf("生成失败: %v", err)
 	}
@@ -126,12 +126,12 @@ func TestTempCodeRateLimit(t *testing.T) {
 	now := int64(1_000)
 	c := newTestCredential(&now)
 
-	if _, _, err := c.IssueTemp(now, "10.0.0.1", DefaultTempTTL); err != nil {
+	if _, _, err := c.IssueTemp(now, "198.51.100.1", DefaultTempTTL); err != nil {
 		t.Fatalf("首次生成失败: %v", err)
 	}
 
 	// 同一 IP 的冷却：60 秒。
-	_, wait, err := c.IssueTemp(now+10, "10.0.0.1", DefaultTempTTL)
+	_, wait, err := c.IssueTemp(now+10, "198.51.100.1", DefaultTempTTL)
 	if !errors.Is(err, ErrTempTooFrequent) {
 		t.Fatalf("同 IP 10 秒内应被限流，实际 err=%v", err)
 	}
@@ -147,13 +147,13 @@ func TestTempCodeRateLimit(t *testing.T) {
 		}
 	}
 	now += TempPerIPCooldown
-	if _, _, err := c.IssueTemp(now, "10.0.2.1", DefaultTempTTL); !errors.Is(err, ErrTempTooFrequent) {
+	if _, _, err := c.IssueTemp(now, "198.51.100.21", DefaultTempTTL); !errors.Is(err, ErrTempTooFrequent) {
 		t.Fatalf("全局 10 分钟内第 6 次应被限流，实际 err=%v", err)
 	}
 
 	// 窗口滑过去之后恢复。
 	now += TempGlobalWindow
-	if _, _, err := c.IssueTemp(now, "10.0.3.1", DefaultTempTTL); err != nil {
+	if _, _, err := c.IssueTemp(now, "198.51.100.31", DefaultTempTTL); err != nil {
 		t.Fatalf("窗口滑过后应恢复，实际: %v", err)
 	}
 }
@@ -162,7 +162,7 @@ func TestTempCodeRateLimit(t *testing.T) {
 func TestSetHashClearsTempCode(t *testing.T) {
 	now := int64(1_000)
 	c := newTestCredential(&now)
-	code, _, err := c.IssueTemp(now, "10.0.0.1", DefaultTempTTL)
+	code, _, err := c.IssueTemp(now, "198.51.100.1", DefaultTempTTL)
 	if err != nil {
 		t.Fatalf("生成失败: %v", err)
 	}

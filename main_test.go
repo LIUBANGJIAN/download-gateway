@@ -91,7 +91,7 @@ func TestIsLoopback(t *testing.T) {
 		{"[::1]:8080", true},
 		{"127.0.0.1", true}, // 无端口
 		{"0.0.0.0:8080", false},
-		{"192.168.1.1:8080", false},
+		{"203.0.113.5:8080", false},
 		{"example.com:80", false},
 		{":8080", false}, // 空 host
 	}
