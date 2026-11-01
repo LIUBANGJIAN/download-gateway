@@ -243,11 +243,15 @@ mod tests {
         assert_eq!(apply(&mut conn, dir.path()).unwrap(), 0, "二次仍幂等");
     }
 
-    /// **T01 验收的硬证据**：拿**真实的** `migrations/V1__init.sql` 跑一遍，
-    /// 断言的不只是"迁移返回 1"，而是 DDL 的**实际效果**
+    /// **T01 验收的硬证据**：拿**真实的** `migrations/` 目录跑一遍，
+    /// 断言的不只是"迁移跑完了"，而是 DDL 的**实际效果**
     /// （14 表 / 17 显式索引 / 外键自检为空）。
+    ///
+    /// ⚠️ 迁移数量是**会变的**：V2（删 admin.password_* 两行）在 v0.1.18 加入后，
+    /// 这里的期望值必须跟着改。写死 `1` 曾经让 CI 在「Go 侧全绿」的情况下红掉 ——
+    /// 教训是别把"仓库当前有几个迁移文件"当成不变量。
     #[test]
-    fn real_v1_migration_produces_14_tables_and_17_indexes() {
+    fn real_migrations_produce_14_tables_and_17_indexes() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
@@ -263,8 +267,8 @@ mod tests {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
             .unwrap();
 
-        assert_eq!(apply(&mut conn, &dir).unwrap(), 1, "应恰好应用 V1");
-        assert_eq!(applied_versions(&conn).unwrap(), vec![1]);
+        assert_eq!(apply(&mut conn, &dir).unwrap(), 2, "应恰好应用 V1+V2");
+        assert_eq!(applied_versions(&conn).unwrap(), vec![1, 2]);
 
         let tables: i64 = conn
             .query_row(

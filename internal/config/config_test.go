@@ -188,20 +188,20 @@ func TestEnvBoolBranches(t *testing.T) {
 
 func snap() EnvSnapshot {
 	return EnvSnapshot{
-		PublicAddr:              "0.0.0.0:6800",
-		AdminAddr:               "127.0.0.1:8080",
-		DBPath:                  "data/x.db",
-		MigrationsDir:           "migrations",
-		LogLevel:                "info",
-		StateDir:                strPtr("/data"),
-		WebDir:                  nil,
-		AdminUser:               "admin",
-		AdminPasswordConfigured: true,
-		PublicUser:              "ops",
+		PublicAddr:               "0.0.0.0:6800",
+		AdminAddr:                "127.0.0.1:8080",
+		DBPath:                   "data/x.db",
+		MigrationsDir:            "migrations",
+		LogLevel:                 "info",
+		StateDir:                 strPtr("/data"),
+		WebDir:                   nil,
+		AdminUser:                "admin",
+		AdminPasswordConfigured:  true,
+		PublicUser:               "ops",
 		PublicPasswordConfigured: true,
-		AllowFileDelete:         false,
-		PublicCORS:              false,
-		AdminCookieSecure:       CookieSecureAuto,
+		AllowFileDelete:          false,
+		PublicCORS:               false,
+		AdminCookieSecure:        CookieSecureAuto,
 	}
 }
 

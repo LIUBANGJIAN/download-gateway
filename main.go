@@ -186,21 +186,21 @@ func run() error {
 	publicState := state.NewPublicState(st, now, publicUserPtr(cfg.PublicUser), cfg.PublicPassword, cfg.PublicCORS, hs)
 
 	env := config.EnvSnapshot{
-		PublicAddr:              cfg.PublicAddr,
-		AdminAddr:               cfg.AdminAddr,
-		DBPath:                  cfg.DBPath,
-		MigrationsDir:           cfg.MigrationsDir,
-		LogLevel:                cfg.LogLevel,
-		StateDir:                stateDirFromEnv(),
-		WebDir:                  cfg.WebDir,
-		AdminUser:               cfg.AdminUser,
-		AdminPasswordConfigured: !adminPolicy.Generated,
-		PublicUser:              cfg.PublicUser,
+		PublicAddr:               cfg.PublicAddr,
+		AdminAddr:                cfg.AdminAddr,
+		DBPath:                   cfg.DBPath,
+		MigrationsDir:            cfg.MigrationsDir,
+		LogLevel:                 cfg.LogLevel,
+		StateDir:                 stateDirFromEnv(),
+		WebDir:                   cfg.WebDir,
+		AdminUser:                cfg.AdminUser,
+		AdminPasswordConfigured:  !adminPolicy.Generated,
+		PublicUser:               cfg.PublicUser,
 		PublicPasswordConfigured: cfg.PublicPassword != nil,
 		PublicPasswordFromToken:  cfg.PublicPasswordFromToken,
-		AllowFileDelete:         cfg.AllowFileDelete,
-		PublicCORS:              cfg.PublicCORS,
-		AdminCookieSecure:       adminPolicy.CookieSecure,
+		AllowFileDelete:          cfg.AllowFileDelete,
+		PublicCORS:               cfg.PublicCORS,
+		AdminCookieSecure:        adminPolicy.CookieSecure,
 	}
 	adminState := state.NewAdminState(st, now, &adminPolicy, env, secrets, cfg.WebDir)
 

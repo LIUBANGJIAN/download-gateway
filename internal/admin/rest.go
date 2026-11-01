@@ -156,12 +156,12 @@ func (s *adminServer) summary(w http.ResponseWriter, r *http.Request) {
 		"task_total":         total,
 		"nodes":              nodes,
 		"env_flags": map[string]any{
-			"public_user":              env.PublicUser,
+			"public_user":                env.PublicUser,
 			"public_password_configured": env.PublicPasswordConfigured,
-			"admin_password_configured": env.AdminPasswordConfigured,
-			"allow_file_delete":         env.AllowFileDelete,
-			"public_cors":               env.PublicCORS,
-			"admin_cookie_secure":       env.AdminCookieSecure.String(),
+			"admin_password_configured":  env.AdminPasswordConfigured,
+			"allow_file_delete":          env.AllowFileDelete,
+			"public_cors":                env.PublicCORS,
+			"admin_cookie_secure":        env.AdminCookieSecure.String(),
 		},
 		// 真实运行状态（env 开关 + app_config），不再写死 false。
 		"scheduler_enabled": engine.SchedulerEnabled(r.Context(), s.st.Store),
