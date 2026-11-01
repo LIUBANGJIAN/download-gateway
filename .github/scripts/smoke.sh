@@ -72,11 +72,27 @@ COOKIE_JAR="$(mktemp)"
 # 这个计数器 + 末尾的下限校验，就是专门堵它的。
 FAILS=0
 CHECKS=0
+# 失败描述累积器。为什么要有它：GitHub 的 job 日志接口要鉴权（匿名请求 403），
+# 所以流水线红了以后，从外面**只能读到注解**（`/check-runs/{id}/annotations`）。
+# 只在日志里打 `[FAIL] xxx` 等于把失败原因锁进保险柜，外部只看到一句
+# 「共 N/M 条断言未通过」的谜语 —— 2026-11-01 就这样为一条抖动断言反复重跑镜像。
+# 因此每个 [FAIL] 都攒下来，末尾一次性写成**一条可匿名读到的注解**。
+FAIL_DETAIL=""
+DETAIL_MAX=3000
 pass() { printf '  [OK]   %s\n' "$1"; CHECKS=$((CHECKS + 1)); }
 fail() {
   printf '  [FAIL] %s\n' "$1"
   CHECKS=$((CHECKS + 1))
   FAILS=$((FAILS + 1))
+  if [ "${#FAIL_DETAIL}" -lt "$DETAIL_MAX" ]; then
+    FAIL_DETAIL="${FAIL_DETAIL}${1} ；"
+  fi
+}
+
+# 工作流命令（`::error::`）里的 `%` 和换行必须转义，否则 GitHub 会把它们当命令语法。
+# 这里把换行折成空格：断言描述本来就该是一行，折掉比编码成 %0A 更好读。
+gha_escape() {
+  printf '%s' "$1" | tr '\n\r' '  ' | sed -e 's/%/%25/g'
 }
 
 cleanup() {
@@ -756,5 +772,9 @@ if [ "$FAILS" -eq 0 ]; then
 else
   echo " 冒烟失败 ${FAILS} 处（共 ${CHECKS} 条断言）"
   echo "::error title=容器冒烟失败::共 ${FAILS}/${CHECKS} 条断言未通过。请查看上方 [FAIL] 行（含实际 HTTP 状态码与响应片段）。"
+  # 锁 ③：失败明细也打成注解 —— 与成功路径的 `::notice::` 对称。
+  # 没有这条，流水线红了以后外部**无从得知**是哪一条断言、返回了什么：
+  # 作业日志要鉴权，注解不要。宁可让注解长一点，也不要让人靠猜。
+  echo "::error title=冒烟失败明细（${FAILS} 处）::$(gha_escape "${FAIL_DETAIL}")"
   exit 1
 fi
