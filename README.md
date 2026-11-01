@@ -251,6 +251,58 @@ IMAGE_TAG=sha-eb6a12c docker compose up -d       # 或写进同目录的 .env
    与之配套的是 `DISPATCH_ADMIN_COOKIE_SECURE`：明文 HTTP 下 `Secure` cookie 不会被浏览器回传，
    默认 `auto` 已经替你绕开了这个坑（见上面配置表里的说明）。**正式做法仍是配 TLS 反代 + 走 `always`。**
 
+### 对外提供服务（跨机器 / 公网）的最小配置
+
+只要 6800 不是「只有自己这台机器能访问」，就必须设三样。**用下面这条一次生成并写进 `.env`**：
+
+```bash
+cat > .env <<EOF
+DISPATCH_PUBLIC_TOKEN=$(openssl rand -hex 24)
+DISPATCH_ADMIN_PASSWORD=$(openssl rand -hex 18)
+DISPATCH_SECRET_KEY=$(openssl rand -hex 32)
+EOF
+```
+
+> ⚠️ 不要手写 `DISPATCH_PUBLIC_TOKEN=$(openssl rand -hex 24)` 塞进 `.env` ——
+> **`.env` 文件只做 `${VAR}` 插值，不执行命令替换**。那样得到的令牌就是
+> `$(openssl rand -hex 24)` 这串字面量本身；而它**长度刚好能过 `DISPATCH_SECRET_KEY`
+> 的 16 字符下限**，于是校验全绿、所有人共用同一个假密钥，比不设还糟。
+> 上面的 heredoc 是由 shell 展开后才落盘的，所以没问题。
+
+`.env` 已存在就先备份再执行，别把别的配置冲掉。
+
+三项各是什么：
+
+| 变量 | 不设的后果 |
+|---|---|
+| `DISPATCH_PUBLIC_TOKEN` | 6800 **完全不校验** —— 任何能连上这个端口的人都能投任务、翻任务列表 |
+| `DISPATCH_ADMIN_PASSWORD` | 每次启动随机生成，只打印在 `docker logs` 里；重启就得重新翻日志，连错 5 次锁 5 分钟 |
+| `DISPATCH_SECRET_KEY` | 自动生成并落盘到 `/data/node-secret.key`。**只在本卷内安全**；换成宿主目录、或把库还原到另一台机器而没带密钥文件时，已存节点口令全部解不开 |
+
+改完 `docker compose up -d` 生效，并用启动日志确认闸门是**开**的：
+
+```bash
+docker compose logs gateway | grep -E '对外口未配置|DISPATCH_PUBLIC_TOKEN'
+# 出现「对外口未配置 DISPATCH_PUBLIC_TOKEN：6800 无鉴权」= 没生效，回去检查 .env 有没有被读到
+```
+
+客户端带令牌的三种方式（同一个值）：
+
+| 客户端 | 怎么带 |
+|---|---|
+| Aria2 / AriaNg | 每条调用 `params[0]` 放 `"token:<值>"`；AriaNg 在「设置 → RPC」里填同一个值 |
+| BitComet 协议 | 请求头 `Authorization: Bearer <值>` |
+| 真 BitComet 客户端（走自签握手） | 登录框里**密码填这个令牌值**（用户名不校验）。设了令牌后，密码不匹配一律握手失败 |
+
+两条必须知道的：
+
+1. **令牌是明文 Bearer 头，不加密传输就等于公开。** 对外必须走 TLS（Nginx / Caddy 反代到
+   `127.0.0.1:6800`），并记得给反代加 `proxy_set_header` 透传客户端 IP ——
+   `/api/webui/login` 有按来源 IP 的限速（30 次/分钟），拿不到真实 IP 时所有客户端会挤在
+   同一个桶里互相拖累。
+2. **目前只有一个共享令牌，没有「按客户端签发 / 单独吊销」。** 多用户场景下谁泄露了就只能整体换值、
+   全部客户端同步改。要分权就得在外面那层反代做（每个用户一个 Basic Auth，反代再统一带上令牌）。
+
 ## 忘记管理口令怎么办
 
 口令在管理台改过之后，库里存的是不可逆哈希，而且**启动时会明确忽略** `DISPATCH_ADMIN_PASSWORD`
