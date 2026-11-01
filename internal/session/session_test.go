@@ -148,10 +148,10 @@ func TestSameOriginBranches(t *testing.T) {
 			map[string]string{"Origin": "http://evil.example"}, false},
 		{"有 Origin 无 Host → 无法判定即拒绝", "", map[string]string{"Origin": "http://x"}, false},
 		// same-site 不再一刀切拒绝，改为 Origin/Host 精确比对。
-		{"same-site 且 Origin 与 Host 一致 → 同源", "192.168.10.250:8988",
-			map[string]string{"Sec-Fetch-Site": "same-site", "Origin": "http://192.168.10.250:8988"}, true},
-		{"same-site 但 Origin 与 Host 不同 → 拒绝", "192.168.10.250:8988",
-			map[string]string{"Sec-Fetch-Site": "same-site", "Origin": "http://192.168.10.250:8080"}, false},
+		{"same-site 且 Origin 与 Host 一致 → 同源", "192.0.2.10:8988",
+			map[string]string{"Sec-Fetch-Site": "same-site", "Origin": "http://192.0.2.10:8988"}, true},
+		{"same-site 但 Origin 与 Host 不同 → 拒绝", "192.0.2.10:8988",
+			map[string]string{"Sec-Fetch-Site": "same-site", "Origin": "http://192.0.2.10:8080"}, false},
 		{"Origin 带尾斜杠仍视为同源", "127.0.0.1:8080",
 			map[string]string{"Origin": "http://127.0.0.1:8080/"}, true},
 	}
@@ -185,9 +185,9 @@ func TestSameOriginIgnoresHostInHeader(t *testing.T) {
 
 	// 反过来：Request.Host 与 Origin 一致时，Header 里的脏值也不该干扰。
 	req2 := httptest.NewRequest(http.MethodPost, "/api/admin/nodes", nil)
-	req2.Host = "192.168.10.250:8988"
+	req2.Host = "192.0.2.10:8988"
 	req2.Header.Set("Host", "stale.example")
-	req2.Header.Set("Origin", "http://192.168.10.250:8988")
+	req2.Header.Set("Origin", "http://192.0.2.10:8988")
 	if !SameOrigin(req2) {
 		t.Fatalf("Request.Host 与 Origin 一致时应放行，Header 的陈旧值不应参与判定")
 	}

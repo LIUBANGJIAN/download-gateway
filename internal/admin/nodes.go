@@ -102,14 +102,14 @@ type nodeView struct {
 	// 曾经 toView 用内联探活的 online 直接覆盖 State，后果是 `degraded`
 	// （口令错 / 节点侧「App 访问」关闭）被抹成 `online`：管理台显示绿色"在线"，
 	// 调度器却因为 C2 根本不选它 —— 两边说法不一致，用户会去查一个不存在的 bug。
-	Reachable     bool    `json:"reachable"`
-	HTTPCode      *int    `json:"http_code"`
-	LatencyMs     *int64  `json:"latency_ms"`
-	ProbeError    *string `json:"probe_error"`
-	LastProbeAt   int64   `json:"last_probe_at"`
-	LastSeenAt    int64   `json:"last_seen_at"`
-	CreatedAt     int64   `json:"created_at"`
-	UpdatedAt     int64   `json:"updated_at"`
+	Reachable   bool    `json:"reachable"`
+	HTTPCode    *int    `json:"http_code"`
+	LatencyMs   *int64  `json:"latency_ms"`
+	ProbeError  *string `json:"probe_error"`
+	LastProbeAt int64   `json:"last_probe_at"`
+	LastSeenAt  int64   `json:"last_seen_at"`
+	CreatedAt   int64   `json:"created_at"`
+	UpdatedAt   int64   `json:"updated_at"`
 }
 
 // bytesToKbps 把字节/秒折算成界面口径的 KB/s（向下取整，负值当 0）。
@@ -464,14 +464,14 @@ func mapNodeUniqueViolation(err error, alias string) *nodeErr {
 }
 
 // validateBaseURL 校验基址：必须带 http/https 方案，且不含空白。
-// baseURLCredRe 匹配 `scheme://user:pass@` 这一段（只匹配到 `@` 为止）。
+// baseURLCredRe 匹配 `scheme://<user>:<pass>@` 这一段（只匹配到 `@` 为止）。
 var baseURLCredRe = regexp.MustCompile(`(?i)^([a-z][a-z0-9+.\-]*://)([^/@]+):([^/@]+)@`)
 
 // splitURLCredentials 把地址里内嵌的凭据拆出来。
 //
 // 用户习惯直接粘浏览器/群晖面板上那种带凭据的地址：
 //
-//	http://admin:admin@192.168.10.250:9085
+//	http://operator:s3cret@192.0.2.10:9085
 //
 // 原样存有两个后果，都很糟：
 //  1. 节点列表把这个串显示出来，口令就明文摊在屏幕上（截图、录屏、共享全会泄）；
@@ -585,7 +585,7 @@ func (s *adminServer) createNode(ctx context.Context, req nodeCreateReq) (nodeVi
 		return nodeView{}, aerr
 	}
 	// 地址里可能内嵌凭据（用户常直接粘浏览器/群晖面板上的
-	// `http://user:pass@host:port`）。先拆再校验：拆出来的凭据回填到
+	// `http://<user>:<pass>@host:port`）。先拆再校验：拆出来的凭据回填到
 	// user/password 字段，地址本身保持干净，避免口令进库又被明文回显。
 	rawUser, rawPass := "", ""
 	if req.User != nil {
@@ -606,10 +606,10 @@ func (s *adminServer) createNode(ctx context.Context, req nodeCreateReq) (nodeVi
 		}
 	}
 	// 判据必须用 credPass（拆分之后的值），不能用 rawPass：
-	// 用户如果把凭据写在地址里（`http://user:pass@host:port`），rawPass 是空的，
+	// 用户如果把凭据写在地址里（`http://<user>:<pass>@host:port`），rawPass 是空的，
 	// 用 rawPass 判就会把一次合法请求判成「密码必填」—— 实测踩到过（422）。
 	if credPass == "" {
-		return nodeView{}, nodeInvalid("新增节点时密码必填（可填在密码框，或写在地址里 http://user:pass@host:port）")
+		return nodeView{}, nodeInvalid("新增节点时密码必填（可填在密码框，或写在地址里 http://账号:密码@host:port）")
 	}
 	weight := 1.0
 	if req.Weight != nil {

@@ -36,24 +36,24 @@ func TestAdminLoginRejectsWrongUsername(t *testing.T) {
 
 // TestSplitURLCredentials 验证能从地址里拆出凭据。
 //
-// 用户习惯直接把面板上的 `http://admin:admin@host:port` 粘进"地址"栏。
+// 用户习惯直接把面板上的 `http://operator:s3cret@host:port` 粘进"地址"栏。
 // 不拆的后果有两个：口令明文进库又被回显，而真正用于连节点的
 // user/password 字段还是空的 ⇒ 探测失败。
 func TestSplitURLCredentials(t *testing.T) {
 	cases := []struct {
-		name                    string
-		raw, user, pass         string
+		name                        string
+		raw, user, pass             string
 		wantURL, wantUser, wantPass string
 	}{
 		{
-			name: "带凭据的典型地址",
-			raw:  "http://admin:admin@192.168.10.250:9085",
-			wantURL: "http://192.168.10.250:9085", wantUser: "admin", wantPass: "admin",
+			name:    "带凭据的典型地址",
+			raw:     "http://operator:s3cret@192.0.2.10:9085",
+			wantURL: "http://192.0.2.10:9085", wantUser: "operator", wantPass: "s3cret",
 		},
 		{
-			name: "无凭据时原样返回",
-			raw:  "http://192.168.10.250:9085",
-			wantURL: "http://192.168.10.250:9085", wantUser: "", wantPass: "",
+			name:    "无凭据时原样返回",
+			raw:     "http://192.0.2.10:9085",
+			wantURL: "http://192.0.2.10:9085", wantUser: "", wantPass: "",
 		},
 		{
 			name: "显式字段优先于地址里的值",
@@ -61,13 +61,13 @@ func TestSplitURLCredentials(t *testing.T) {
 			wantURL: "http://host:9085", wantUser: "u2", wantPass: "p2",
 		},
 		{
-			name: "只有用户名没有口令时不拆（避免把端口当口令）",
-			raw:  "http://admin@host:9085",
-			wantURL: "http://admin@host:9085", wantUser: "", wantPass: "",
+			name:    "只有用户名没有口令时不拆（避免把端口当口令）",
+			raw:     "http://operator@host:9085",
+			wantURL: "http://operator@host:9085", wantUser: "", wantPass: "",
 		},
 		{
-			name: "https 同样处理",
-			raw:  "https://bob:secret@nas.example:8443",
+			name:    "https 同样处理",
+			raw:     "https://bob:secret@nas.example:8443",
 			wantURL: "https://nas.example:8443", wantUser: "bob", wantPass: "secret",
 		},
 	}
@@ -83,9 +83,9 @@ func TestSplitURLCredentials(t *testing.T) {
 // TestMaskURLCredentials 验证回显脱敏：口令不出现在界面上，其余部分原样保留。
 func TestMaskURLCredentials(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"http://admin:admin@192.168.10.250:9085", "http://admin:***@192.168.10.250:9085"},
+		{"http://operator:s3cret@192.0.2.10:9085", "http://operator:***@192.0.2.10:9085"},
 		{"https://bob:p%40ss@nas.example:8443", "https://bob:***@nas.example:8443"},
-		{"http://192.168.10.250:9085", "http://192.168.10.250:9085"},
+		{"http://192.0.2.10:9085", "http://192.0.2.10:9085"},
 		{"", ""},
 	}
 	for _, c := range cases {
@@ -108,19 +108,21 @@ func TestCreateNodeWithCredentialsInURL(t *testing.T) {
 	}
 
 	status, body := doReq(t, client, http.MethodPost, srv.URL+"/api/admin/nodes",
-		`{"alias":"nas","base_url":"http://admin:secret@203.0.113.10:9085",`+
+		`{"alias":"nas","base_url":"http://operator:s3cret@203.0.113.10:9085",`+
 			`"weight":1,"max_concurrent":3,"max_rate_kbps":0,"role":"series"}`)
 	if status != http.StatusOK {
 		t.Fatalf("地址带凭据时应能创建（密码框可留空），实际 %d %s", status, body)
 	}
 	// 回显的地址不得再带口令。
-	if strings.Contains(string(body), "secret@") {
+	// 断言必须跟着上面那串字面量走：写成别的口令会变成恒真空转（原先是 "secret@"，
+	// 字面量改成 s3cret 之后 "secret@" 不再是它的子串，这条就永远是绿的）。
+	if strings.Contains(string(body), "s3cret@") {
 		t.Fatalf("响应里的 base_url 不得含明文口令：%s", body)
 	}
 	if !strings.Contains(string(body), "http://203.0.113.10:9085") {
 		t.Fatalf("base_url 应被清洗成 host:port，实际 %s", body)
 	}
-	if !strings.Contains(string(body), `"user":"admin"`) {
+	if !strings.Contains(string(body), `"user":"operator"`) {
 		t.Fatalf("地址里的用户名应回填到 user 字段：%s", body)
 	}
 	if !strings.Contains(string(body), `"password_set":true`) {
