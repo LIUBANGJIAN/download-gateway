@@ -11,22 +11,29 @@ BitComet 下载任务代理分发网关：软件把下载任务推送到代理�
 | 项 | 状态 |
 |---|---|
 | 设计 | 已闭合（14 表 / 17 显式索引 / 双端口 / 五级去重 / C1–C6 硬约束） |
-| 实现 | **T01 工程骨架** ✅ · **T02 BitComet 客户端** ✅（三台真节点已验收） · **T08 Aria2 兼容面** ✅ · **T09 BitComet 兼容面 + 自签三段式握手** ✅ · **T05（入库侧）任务建立 / read-after-write / 状态机** ✅ · **T10（后端 + 内嵌台）管理 API / 会话 / Web 管理台** ✅ · **T11 管理台纠偏 + 下载节点管理 + 派发策略页** ✅ · **B1 调度内核：分组识别 / 亲和短路 / C1–C5 硬约束 / 软评分 / 建绑 / 真投递 / 回读同步** ✅ |
-| 未实现 | **B2**（绑定失效与重绑：`strong`/`weak`/`manual` 分流）、**B3**（跨来源去重 + 代理侧补名）。⇒ 已知后果：绑定节点长期不健康时该组会停在排队（**刻意行为**，不静默改绑，换节点必须留痕） |
+| 实现 | **T01 工程骨架** ✅ · **T02 BitComet 客户端** ✅（三台真节点已验收） · **T08 Aria2 兼容面** ✅ · **T09 BitComet 兼容面 + 自签三段式握手** ✅ · **T05（入库侧）任务建立 / read-after-write / 状态机** ✅ · **T10（后端 + 内嵌台）管理 API / 会话 / Web 管理台** ✅ · **T11 管理台纠偏 + 下载节点管理 + 派发策略页** ✅ · **B1 调度内核：分组识别 / 亲和短路 / C1–C6 硬约束 / 软评分 / 建绑 / 真投递 / 回读同步** ✅ · **B2 绑定失效与重绑：`strong`/`weak`/`manual` 分流 / 拆组 / rejoin 追平** ✅ · **B3 跨来源去重（五级键）+ 代理侧补名** ✅ · **12 条派发策略全部接入内核** ✅ |
+| 未实现 | 只剩「真节点端到端验收」这一步（缺节点凭据 + 节点侧「App 访问」开关未确认）。代码层面的需求池已清空。 |
 | CI/CD | ✅ 双架构镜像已在 Docker Hub：`liubangjian/download-gateway` 的 `latest` 与 `sha-<短SHA>` 均含 linux/amd64 + linux/arm64 |
 | CI 验证深度 | 脱敏闸门 → 质量门（fmt / clippy / test）→ 原生矩阵构建 → 多架构 manifest → **容器冒烟**（把刚构建的镜像**真跑起来**逐个打接口） |
 | 部署 | ✅ `docker-compose.yml`（本仓库） |
 
-> ✅ **链路已闭合（B1）。** 任务从 :6800 入库后，调度循环会在 1 秒内扫到它，
-> 按「组亲和 → C1–C5 硬约束 → 软评分」选出节点，**事务内**写建绑与投递意图，
+> ✅ **链路已闭合（B1 + B2 + B3）。** 任务从 :6800 入库后，调度循环会在 1 秒内扫到它，
+> 按「组亲和 → C1–C6 硬约束 → 软评分」选出节点，**事务内**写建绑与投递意图，
 > 提交后**真的向 BitComet 节点发 `add`**，再每 15 秒回读进度。
 >
-> 两条必须知道的边界：
+> 三条必须知道的边界：
 > 1. **节点 `state` 要是 `online` 才会被选中**（C2 收紧）。新加的节点默认 `unknown`，
 >    需要在管理台点一次「探测」把它变成 `online` —— 否则任务会一直排队，
 >    这是**按设计**的行为（不是"没生效"）。
-> 2. **B1 没有绑定失效路径**：组一旦绑定某节点，该节点不健康时该组只会排队，
->    **不会**自动换到别的机器（换节点必须留痕，那是 B2 的职责）。
+> 2. **换节点永不静默（R-3）。** 绑定节点不健康时按 `strong`/`weak`/`manual` 三种策略处理：
+>    `strong` 先等宽限期（默认 300 秒）再拆，`weak` 立即拆，`manual` 永不自动改绑、只告警一次。
+>    拆组会写 `group_binding_log` 并递增 `binding_epoch`（日志的 `from_node`/`to_node` 与实际
+>    落点必须自洽，这一条有测试守着），**已下载内容不删不迁移**（BitComet 不支持热迁移）
+>    —— 所以"换节点"的真实含义是"后续新成员去新节点，老成员留原地"；原节点恢复健康后
+>    会走 `rejoin` 把新成员追平回去。
+> 3. **去重只对高置信度生效。** 精确命中（BT infohash / 与节点算法对齐的 GUID）与高置信
+>    （来源+文件名+大小三段齐）才会真的判重；中置信（URL 归一化后相等、名称+大小相等）一律
+>    标 `possible_duplicate=1` 但仍投递 —— 漏任务不可挽回，重复下载只是浪费带宽。
 
 ## 快速开始
 
@@ -132,14 +139,15 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/
 # → 200（Web 管理台首页；未登录会跳登录页）
 ```
 
-**管理台有五个页面**：总览 / 节点 / 任务 / 设置 / 退出。
+**管理台有六个页面**：总览 / 节点 / 任务 / 告警 / 设置 / 退出。
 
 | 页面 | 能做什么 |
 |---|---|
 | 总览 | 看运行环境快照（调度内核是否启用、节点数、任务状态分布） |
 | 节点 | 下载节点的**增 / 删 / 改**、**派发开关**、**在线/离线**实时探测、**密码回看** |
 | 任务 | **只看与干预**：查看当前任务、暂停 / 恢复 / 重试 / 删除（可选是否连带删节点文件） |
-| 设置 | 12 条派发 / 负载策略的**逐条开关**与**拖动排序**（行序即优先级）。⚠️ 现在只是**把策略配下来**——调度内核已启用，但它用的是**内置默认策略**，还没读取这里的值，所以改了**不会**影响实际行为（接这条链路属 B2） |
+| 告警 | `event_log` 的**只读**入口：节点离线、投递失败、绑定失效拆组、去重命中、重试耗尽都在这。按级别 / 类别筛选，游标翻页。**刻意不给"清除"**——能被界面改写的审计就不算证据 |
+| 设置 | 12 条派发 / 负载策略的**逐条开关**与**拖动排序**（行序即优先级）。✅ **12 条全部已接入调度内核**：保存后下一个调度周期（约 1 秒）即按新值选点，不需要重启。每一行末列如实标注「已生效 / 未生效」，未生效的会写明具体原因（`TestEveryCatalogKeyIsWired` 守着这条，将来加策略忘了接线会直接红） |
 
 ### ⚠️ 职责边界：管理台**永不提供「添加任务」**
 
@@ -365,29 +373,42 @@ docker restart <容器名>
 
 ## 工程结构
 
+生产镜像是 **Go 实现**（`Dockerfile-go`，alpine 底座约 27 MB）。Rust 树保留为**对照与回退路径**
+（根 `Dockerfile`，debian 底座约 143 MB），CI 仍跑它的质量门，但新功能只在 Go 侧加。
+
 ```
-Cargo.toml              workspace 根（同时是根 package）
-src/
-  main.rs               双端口入口（6800 对外 / 8080 管理）
-  config.rs             环境变量配置
-crates/
-  dispatch-core/        核心库：
-    src/state.rs          PublicState / AdminState（共享句柄）
-    src/secret.rs         节点口令的可逆加密盒（RNCryptor v3；管理台「眼睛」的后端）
-    src/tasks/            任务建立 / 查询 / 状态映射（唯一入库入口）
-    src/ingress/          对外口 6800：Aria2 兼容面、BitComet 兼容面、自签三段式握手
-    src/admin/            管理口 8080：REST + 会话 + 内嵌 Web 管理台
-      rest.rs             任务列表 / 任务干预（**刻意没有「添加任务」**）
-      nodes.rs            下载节点 CRUD / 派发开关 / 密码回看 / 在线探测
-      policy.rs           12 条派发与负载策略的读写（存 app_config KV，只存差异）
-      web/                内嵌管理台（index.html / app.js / app.css）
-  bitcomet-api/         BitComet WebUI API 客户端（RNCryptor v3 三段式）
+main.go                 双端口入口（6800 对外 / 8080 管理）
+internal/
+  config/               环境变量配置
+  store/                SQLite 单写者 actor：连接 / 迁移 / 事务 / 128 并发写单测
+  domain/               内部状态机（11 值）、Aria2 状态派生、错误分类 —— 纯函数，零 IO
+  tasks/                任务建立 / 查询 / 状态映射（**唯一入库入口**）
+  ingress/              对外口 6800：Aria2 兼容面、BitComet 兼容面、自签三段式握手
+  handshake/            自签三段式握手的令牌存储
+  protocol/             BitComet WebUI API 客户端（RNCryptor v3 三段式）
+  scheduler/            选点纯函数：硬约束 C1–C6 / 软评分 / 亲和 / 绑定失效分流（B2）
+  grouping/             分组识别与建绑（组 + 任务 + 绑定日志**同事务**）
+  dispatch/             投递执行：失败分类、退避、限流倍率
+  sync/                 回读同步：节点状态 → 内部状态
+  dedup/                五级去重键（L1/L2a/L2b/L2c/L3）+ 去重账（B3）
+  naming/               代理侧补名器：`<剧名>.S01E01.<原名>`，可逆、拿不到剧名就静默不补
+  engine/               调度循环：tick 级预留 / 绑定分流执行 / 判重前置 / 补名 / 限速
+  session/ + adminpass/ 会话与口令
+  admin/                管理口 8080：REST + 会话 + 内嵌 Web 管理台
+    rest.go             任务列表 / 任务干预（**刻意没有「添加任务」**）
+    nodes.go            下载节点 CRUD / 派发开关 / 密码回看 / 在线探测
+    policy.go           12 条派发与负载策略的读写（存 app_config KV，只存差异）
+    events.go           `event_log` 的读入口（游标分页 / 级别与类别筛选）
+    web/                内嵌管理台（index.html / app.js / app.css，零构建）
+  layerguard/           分层依赖闸门（用测试守住"下层不许 import 上层"）
 migrations/
   V1__init.sql          14 表 / 17 索引
+crates/ + src/          Rust 版（对照与回退路径；CI 仍跑 rustfmt / clippy / cargo test）
 .github/
-  workflows/ci.yml      脱敏闸门 → 质量门 → 原生矩阵 → 多架构 manifest → 容器冒烟
+  workflows/ci.yml      脱敏闸门 → 质量门（Rust + Go 双轨）→ 原生矩阵 → 多架构 manifest → 容器冒烟
   scripts/smoke.sh      容器冒烟：把刚构建的镜像真跑起来，逐面打接口
-Dockerfile              多阶段（Rust 构建 + 瘦运行镜像，非 root uid 10001）
+Dockerfile-go           生产镜像（Go + alpine）
+Dockerfile              Rust 版镜像（对照）
 docker-compose.yml      部署用 Compose（命名卷 / 管理口只绑回环 / stop_signal: SIGINT）
 ```
 
@@ -453,20 +474,27 @@ docker-compose.yml      部署用 Compose（命名卷 / 管理口只绑回环 / 
    看起来合理的假路径会被用户当成事实（"我文件在哪"），危害大于空值。
 5. **Aria2 `status` 取 `task.aria_status` 列**（设计 `02 §4.1.5`），不从 `internal_state` 重新派生 ——
    否则 `start_later:true` 建出的任务（`internal_state='queued'` + `aria_status='paused'`）会错误地报成 `waiting`。
-6. **`tellStopped` 的终态集合目前是 `{completed, failed, removed}`。**
-   将来 T03/T06 引入 `orphaned` / `missing_on_node` / `deduplicated`（分别映射到 Aria2 的 `error` / `removed`）时，
-   **必须同步补进终态集合**，否则 `tellStopped` 会静默漏掉这些任务。
-7. **「设置」页的策略可以配、但暂时不影响行为。** 12 条派发/负载策略的开关与优先级是**真的**存进了库
-   （`app_config` 表，key 形如 `policy.<策略键>`，代码里有完整默认表、库里只存差异），
-   接口也会真校验（未知键 / 越界优先级 / 关闭安全阀一律 422）；
-   但**调度内核读的是编译期默认策略**（`scheduler.DefaultPolicy()`），从不读这些 key，
-   所以没有任何组件会拿它们改变选点结果。
-   ⚠️ 注意「不生效」的理由已经变过一次：**内核本身已经落地了**，缺的是
-   「`app_config` → 内核」这一段接线（B2 第一优先级）。这个区别很要紧 ——
-   旧说法会把排查方向指向"功能没做"，而真实原因是"功能做了、数据链路没接"。
-   接口返回体里为此专门带一个 `effective` 字段与一句 `effective_note`，
-   把这个事实**写在响应里**而不是只写在文档里——免得有人在生产上"调完策略发现没变化"，
-   然后去查一个根本不存在的 bug。
+6. **`tellStopped` 的终态集合是 6 个内部状态，且由测试守着。**
+   现为 `{completed, failed, failed_terminal, removed, orphaned, deduplicated}`。
+   这里曾经只有 3 个（`{completed, failed, removed}`），而 B1 写的是 `failed_terminal` ——
+   于是**每一个重试耗尽的任务都对 aria2 客户端隐身**：`tellStatus` 查得到、`tellStopped`
+   查不到、`getGlobalStat.numStopped` 也少算，客户端据此以为"还在跑"。
+   现在 `TestStoppedStatesCoversEveryTerminalState` 穷举 `domain` 的全部内部状态：
+   新增一个状态后，要么登记进终态集合，要么登记进 `nonStoppedStates` 并写明为什么不终态，
+   两者都不做就红。**不需要靠人记得这条注释。**
+7. **「设置」页的策略全部真的生效（12 / 12）。** 12 条派发/负载策略的开关与优先级存在
+   `app_config`（key 形如 `policy.<策略键>`，代码里有完整默认表、库里只存差异），
+   调度内核每个周期读一次并落到权重与硬约束开关上 —— 改完约 1 秒生效，**不需要重启**。
+   接口返回体里带 `effective` 与 `effective_note`，逐条判定而不是全局常量：
+   判据来自 `scheduler.PolicyKeySpec`（内核是否认识这个键），将来新增策略却忘了接线时，
+   那一条会自动变回 `false` 并让 `TestEveryCatalogKeyIsWired` 直接为红。
+   ⚠️ 这条说法的方向已经变过**两次**，两次都值得记着：
+   先是「配了完全不影响行为」（那时内核读的是编译期默认策略，一句实话），
+   后来成了「配了只影响 8 条」（那句 `effective:false` 从实话变成了反向谎报）。
+   现在改为由代码逐条算、并且有测试交叉断言 —— **不要让这句话再靠人记着更新**。
+   关闭语义也要注意：`retry_backoff` 关闭 = 固定间隔（**不是**不重试）、
+   `throttle_backoff` 关闭 = 倍率 1.0、`node_rate_limit` 关闭 = 0（不限速）、
+   `group_affinity` 关闭 = 显式拆组（而不是"悄悄换个节点"）。
 8. **节点口令必须可逆加密，这是「点眼睛看密码」换来的代价。** 哈希存口令（更安全的常规做法）
    在这个功能下不成立。加密用的是 BitComet 客户端那套 RNCryptor v3，密钥来自
    `DISPATCH_SECRET_KEY` 或库目录下的 `node-secret.key`。**这个文件必须进持久化卷**，
@@ -475,10 +503,18 @@ docker-compose.yml      部署用 Compose（命名卷 / 管理口只绑回环 / 
 
 ### 已知缺口（尚未实现）
 
-- **B2 第一优先级：策略表 → 内核的接线。** 内核用的是内置默认策略（见上一条第 7 点），
-  设置页存下来的开关与优先级目前没有消费者。
-- **B2 / B3**：绑定失效路径（`unbind`）、回读的三级轮询（现为单层 15s）、
-  `missing_on_node` / `external` 状态落库（现在只写 `event_log`）、去重三层。
+代码层面的需求池已清空（12 条策略全接、B1/B2/B3 全落地、`event_log` 有了读接口）。
+剩下的是**能力上限**与**未验收**两类，不是"还没写"：
+
+- **真节点端到端验收还没做。** B1-AC1~AC7、B2-AC1~AC5、B3-AC1~AC4 目前是**代码 + 单测/集成层**全绿，
+  缺一次"从上游软件推到 :6800 → 管理台看到 → 节点真的在下 → 进度在涨 → 完成"的实机走通。
+  阻塞项：节点凭据 + 节点侧「App 访问」开关未确认。
+- **回读仍是单层 15 秒轮询**，没有三级退避（设计中「刚开始密、稳定后疏」那一层没做）。
+  代价是稳态下每 15 秒一次无谓请求，**不影响正确性**。
+- **`missing_on_node` / `external` 两个内部状态仍在白名单里没落地**（现在只写 `event_log`）。
+  它们不进 `tellStopped` 也不影响调度，但管理台看不到这两个分类。
+- **`:6800` 未配 `DISPATCH_PUBLIC_TOKEN` 时无鉴权** —— 与 aria2 的裸口行为一致，属**按设计**；
+  要暴露到不可信网络就必须配上它。
 - ~~**T03–T07**：节点健康检查 / 调度器选点 / 真正下发 / 轮询同步~~ →
   **已于 2026-10-18 落地**，见上面「链路已闭合（B1）」。启动日志会明确写出
   `调度内核已启用`；若被 `DISPATCH_SCHEDULER=off` 关掉，才会退化成"只入库不下载"。
@@ -490,13 +526,24 @@ docker-compose.yml      部署用 Compose（命名卷 / 管理口只绑回环 / 
 
 ## 开发
 
+主线的四条命令（与 CI 的 `go` 作业逐字一致）：
+
+```bash
+gofmt -l internal/          # 必须无输出
+go vet ./...
+go build ./...
+go test ./... -count=1      # CI 还会再跑一遍 -race
+```
+
+Rust 对照树仍跑这三行（CI 的 `quality` 作业）：
+
 ```bash
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all --locked
 ```
 
-**这三行要与 CI 逐字一致**，尤其是 `--all-features` 和 `--locked`：
+**这几行要与 CI 逐字一致**，尤其是 `--all-features` 和 `--locked`：
 少了前者会出现"本地绿、CI 红"；少了后者则本地会静默更新 `Cargo.lock`，
 而 CI 用的是 `--locked`（改了 `Cargo.toml` 必须同步 `Cargo.lock`）。
 
@@ -508,6 +555,8 @@ cargo test --all --locked
 健康检查（两个端口）→ aria2 原生协议面 → BitComet 协议面（未认证必须 401）
 → 管理口登录（含错误口令必须 401）→ 只读接口 → 节点增删改 + 密码回看 + 限速折算
 → 策略保存与校验（越界 / 未知键 / 关闭安全阀 各打一枪 422）
+→ 【断言】12 条策略的 effective 必须如实标注（生效条数 == 总条数，且每条带说明）
+→ 【断言】告警接口契约（items + next_before 游标、非法筛选 422、未登录 401）
 → 【断言】管理台不得能提交任务（POST /api/admin/tasks 必须 404/405、GET /tasks/new 必须 404）
 ```
 

@@ -49,3 +49,7 @@ f_*.txt
 f_*.json
 r_*.err
 r_*.json
+
+# ---- Python 字节码缓存（scripts/ 下有一个假节点脚本会生成它）----
+__pycache__/
+*.pyc

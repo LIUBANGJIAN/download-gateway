@@ -1,24 +1,24 @@
 // 管理台「设置」页的数据源：派发 / 负载策略的**清单 + 开关 + 优先级**，以及运行环境快照。
 //
-// # 本轮它仍是「可配置」，但「不生效」的理由已经变了
+// # 策略已经接进调度内核（B1.5，2026-11-01）
 //
-// ⚠️ 这里曾经写的是「调度内核（B 类）尚未落地」。**调度内核已经落地了**
-// （`internal/engine`，2026-10-18），但策略仍然不生效 —— 原因换成了另一个：
-// 内核读的是编译期默认策略（`scheduler.DefaultPolicy()`），**从不读
-// `app_config` 里的 `policy.*`**。也就是说这一页存下去的值，没有任何组件消费。
+// 这页存的值现在**真的会改变选点结果**：`internal/engine` 每个调度周期读一次
+// `policy.*`，经 `scheduler.ApplyOverrides` 落到权重与硬约束开关上。
 //
-// 所以 `effective` 仍必须是 `false`。把它改成 `true` 是**反向谎报**：
-// 用户调完策略发现下载分布没变，会去查一个不存在的调度 bug。
-// 而保留旧的说明同样是撒谎 —— 它会把排查方向指向"功能没做"，而真正的原因是
-// "功能做了、但这条数据链路没接"。两者的排查路径完全相反。
+// 12 条**全部**被内核消费（B1.5 收尾）：`group_affinity` 随 B2 的显式拆组落地，
+// `retry_backoff` / `throttle_backoff` / `node_rate_limit` 在投递层接上了参数。
+// `effective` 仍是**逐条判定**而不是全局常量：判据来自 `scheduler.PolicyKeySpec`，
+// 将来新增策略却忘了接线时，这一条会自动变回 `false` 并让
+// `TestEveryCatalogKeyIsWired` / `catalog全覆盖_*` 直接为红。
 //
-// 接这条链路属于 B2，是 B2 的第一优先级项。
+// 判据的唯一来源是 `scheduler.PolicyKeySpec`：内核认识这个键 ⇒ 生效。
+// 两边不会漂移，因为 `engine` 侧有 `TestPolicyMetaMatchesAdminCatalog` 交叉断言。
 //
 // # 存储：复用 `app_config` KV，**不新建表**
 //
 // key = `policy.<策略键>`，value = JSON `{"enabled":bool,"priority":int}`。
 // 代码里内置完整默认表（[catalog]），库里**只存用户改过的差异** —— 这样将来
-// 策略增删不需要写迁移。
+// 策略增删不需要写迁移；内核也只应用差异，没改过的策略一律走内置默认。
 package admin
 
 import (
@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/LIUBANGJIAN/download-gateway/internal/ids"
+	"github.com/LIUBANGJIAN/download-gateway/internal/scheduler"
 	"github.com/LIUBANGJIAN/download-gateway/internal/session"
 )
 
@@ -36,12 +37,6 @@ const (
 	priorityMin int64 = 1
 	priorityMax int64 = 999
 )
-
-// effectiveNote 是所有策略统一的生效说明。
-//
-// 措辞要点：说清「已保存 / 尚未生效 / 为什么不生效」，且**指向正确的排查方向**。
-// 调度内核是有的，缺的是「app_config → 内核」这一段接线。
-const effectiveNote = "已保存，但当前不影响调度 —— 调度内核已启用，却使用内置默认策略（尚未读取这里的开关与优先级）。接这条链路属于 B2。"
 
 // policyDef 是单条策略的静态定义。
 type policyDef struct {
@@ -135,7 +130,22 @@ func (s *adminServer) loadPolicies(r *http.Request) ([]policyView, error) {
 }
 
 // toJSON 转成接口形态（字段名对齐 Rust `PolicyView` 的 snake_case）。
+//
+// # `effective` 逐条判定，不再是一个全局常量
+//
+// 之前 12 条共用一句 `effective:false` + 同一段说明，那是"调度内核没落地"时期的口径。
+// 现在内核已落地、8 条策略真的被读取了，再用全局常量就会同时犯两个错：
+// 把生效的说成没生效（用户不敢用），把没生效的混在生效里（用户以为调了有用）。
+//
+// 判据来自 `scheduler.PolicyKeySpec` —— 内核是否认识这个键。认识 = 生效，
+// 不认识 = 未接，且必须给出**具体原因**而不是一句空话。
 func (v policyView) toJSON() map[string]any {
+	effective := false
+	note := unsupportedPolicyNotes[v.def.Key]
+	if spec, ok := scheduler.PolicyKeySpec(v.def.Key); ok {
+		effective = true
+		note = "已生效：调度内核每次选点都读取本项（" + spec.Drives + "），保存后下一个调度周期即按新值执行。"
+	}
 	return map[string]any{
 		"key":            v.def.Key,
 		"name":           v.def.Name,
@@ -146,10 +156,21 @@ func (v policyView) toJSON() map[string]any {
 		"can_disable":    v.def.CanDisable,
 		"dangerous":      v.def.Dangerous,
 		"customized":     v.Customized,
-		"effective":      false,
-		"effective_note": effectiveNote,
+		"effective":      effective,
+		"effective_note": note,
 	}
 }
+
+// unsupportedPolicyNotes 是「内核对它无感」的策略的**具体原因**。
+//
+// 为什么每条都要单独写：一句"暂未生效"会把排查方向引回"功能没做"，
+// 而真实原因各不相同（有的缺配套能力，有的参数还是写死的常量）。
+// 让人一眼看出该等哪一项，比给个笼统的 false 有用得多。
+// 现在 **12 条全部已接**，所以这张表是空的 —— 保留它的结构是为了给将来新增的
+// 策略留一个"必须写清为什么没生效"的位置：留空比删掉更能防止有人加了一条策略
+// 却既不接线、也不解释（那时 `effective` 会是 `false` 而 note 是空字符串，
+// 用户看到的就是一个没有理由的"未生效"）。
+var unsupportedPolicyNotes = map[string]string{}
 
 // configGet 实现 `GET /api/admin/config`。
 func (s *adminServer) configGet(w http.ResponseWriter, r *http.Request) {

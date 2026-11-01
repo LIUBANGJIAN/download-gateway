@@ -63,19 +63,66 @@ type Decision struct {
 	Score float64
 	// Evaluated 全部节点的评估记录（含淘汰原因）。
 	Evaluated []NodeEval
+	// Binding 是绑定处置结论（仅当任务属于已绑定的组时有意义）。
+	//
+	// 调用方必须按它执行：`BindWait` 要写 `wait_deadline`（当 Deadline>0）、
+	// `BindSplit` 要在**投递之前**写 `group_binding_log`，`BindRejoin` 要留痕。
+	// 把结论带出来而不是让调用方重新判一遍，是为了让"判一次、按判据执行"成为唯一路径。
+	Binding BindingResolution
 }
 
-// Pick 是唯一入口：阶段 0 → 阶段 1 → 阶段 2。
+// Pick 是唯一入口：阶段 0（含 B2 失效分流）→ 阶段 1（硬约束）→ 阶段 2（软评分）。
 //
 // 🔒 禁止静默改绑（team-lead 裁定 R-3）：
-// 组已绑定时**只可能**产出 `DecAffinityHit` / `DecAffinityWait` / `DecBindingInvalid` /
-// `DecSplitForced`，**永远不会**产出 `DecScored` 去选别的节点。
-// 唯一合法的换节点路径是 B2 的失效重绑（会写 `group_binding_log` 并递增 `binding_epoch`）。
+// 组已绑定时**永远不会**直接产出 `DecScored` 去选别的节点。唯一合法的换节点路径是
+// `BindSplit`（拆组）—— 它返回 `DecBindingInvalid`，调用方必须先写
+// `group_binding_log`（`action='split'`、`binding_epoch+1`）才允许改走评分。
 func Pick(in PickInput) Decision {
-	if in.Group != nil && in.Group.BoundNodeID != nil {
-		return pickBound(in)
+	if in.Group == nil || in.Group.BoundNodeID == nil {
+		return pickScored(in)
 	}
-	return pickScored(in)
+	if in.BoundNode == nil {
+		in.BoundNode = findCandidate(in.Nodes, *in.Group.BoundNodeID)
+	}
+
+	res := ResolveBinding(in)
+	switch res.Action {
+	case BindWait:
+		return Decision{
+			Kind: DecAffinityWait, NodeID: *in.Group.BoundNodeID,
+			Reason: res.Reason, Binding: res,
+		}
+	case BindSplit:
+		// 契约：**不在这里**改派。调用方写日志 → 把组的 GroupState 置为 split →
+		// 再重新 [Pick] 一次（此时走 pickScored）。这样"拆组"一定留痕。
+		return Decision{
+			Kind: DecBindingInvalid, NodeID: *in.Group.BoundNodeID,
+			Reason: res.Reason, Binding: res,
+		}
+	case BindRejoin:
+		// 追平：组已拆且原节点恢复 ⇒ 本成员回到原节点（按亲和命中处理，分数仍算出来留痕）。
+		d := pickBound(in)
+		d.Binding = res
+		return d
+	default: // BindHold
+		if in.Group.GroupState == GroupStateSplit {
+			// 已拆的组：新成员按负载分散（拆组时已留痕，不是静默改绑）。
+			return pickScored(in)
+		}
+		d := pickBound(in)
+		d.Binding = res
+		return d
+	}
+}
+
+// findCandidate 在候选里按 id 找一台（找不到返回 nil）。
+func findCandidate(nodes []Candidate, nodeID int64) *Candidate {
+	for i := range nodes {
+		if nodes[i].NodeID == nodeID {
+			return &nodes[i]
+		}
+	}
+	return nil
 }
 
 // pickBound 是阶段 0 的亲和短路。
@@ -107,13 +154,14 @@ func pickBound(in PickInput) Decision {
 	}
 
 	// 容量：节点级 + 组级（C-12 建议**两者都判**）。
-	if inflight(*node, in) >= node.MaxConcurrent {
+	// 两个上限各自受策略开关控制，关闭时对应那一条不再拦截（另一条仍然生效）。
+	if !in.Cfg.DisableNodeCapacity && inflight(*node, in) >= node.MaxConcurrent {
 		if in.Group.SplitPolicy == "capacity" || in.Cfg.SplitPolicy == "capacity" {
 			return Decision{Kind: DecSplitForced, NodeID: bn, Reason: "bound_capacity"}
 		}
 		return Decision{Kind: DecAffinityWait, NodeID: bn, Reason: "bound_capacity"}
 	}
-	if in.Group.MaxConcurrentInGroup > 0 && in.Group.ActiveInGroup >= in.Group.MaxConcurrentInGroup {
+	if !in.Cfg.DisableGroupCapacity && in.Group.MaxConcurrentInGroup > 0 && in.Group.ActiveInGroup >= in.Group.MaxConcurrentInGroup {
 		return Decision{Kind: DecAffinityWait, NodeID: bn, Reason: "group_capacity"}
 	}
 

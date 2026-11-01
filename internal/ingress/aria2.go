@@ -35,8 +35,24 @@ const (
 // multicallMax 是 `system.multicall` 的子请求上限。
 const multicallMax = 32
 
-// stoppedStates 是 aria2 `tellStopped` 覆盖的终态集合。
-var stoppedStates = []string{"completed", "failed", "removed"}
+// stoppedStates 是 aria2 `tellStopped` 覆盖的终态集合（按 `task.internal_state` 过滤）。
+//
+// ⚠️ 这张表必须与「代码真正会写的终态」同步，漏一个的后果是**静默漏单**：
+// 那些任务用 `tellStatus` 查得到、用 `tellStopped` 查不到，`getGlobalStat.numStopped`
+// 也少算 —— 客户端据此认为"任务还在跑"，于是永远等下去。
+//
+// 历史教训：这里原本只有 `{completed, failed, removed}`，而 B1 写的是
+// `failed_terminal`（重试耗尽）—— 于是**每一个重试耗尽的任务都对 aria2 客户端隐身**。
+// 后来补 `orphaned` / `deduplicated`（去重命中、节点上已消失）时又差一点重演。
+// 现在由 `TestStoppedStatesCoversEveryTerminalState` 守着：新增终态忘了登记会直接红。
+var stoppedStates = []string{
+	"completed",
+	"failed",          // Rust 遗留值，只读存量
+	"failed_terminal", // B1 起真正写入的失败终态
+	"removed",         // aria2 软删 / 管理台硬删后仍可查
+	"orphaned",        // 节点上已不存在（回读发现文件丢了）
+	"deduplicated",    // 跨来源去重命中，本任务不再下载
+}
 
 // implementedMethods 是 `system.listMethods` 的返回清单（与 Rust 逐字同序）。
 var implementedMethods = []string{

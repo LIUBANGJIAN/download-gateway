@@ -354,12 +354,30 @@ func (c *Client) FetchTaskList(ctx context.Context) (map[string]any, error) {
 // save_folder is not sent by default (keep the node's original download folder);
 // only when the caller passes one explicitly is it included.
 func (c *Client) AddHTTPTask(ctx context.Context, url string, saveFolder *string, startLater bool) (map[string]any, error) {
+	return c.AddHTTPTaskNamed(ctx, url, nil, saveFolder, startLater)
+}
+
+// AddHTTPTaskNamed 同 [AddHTTPTask]，但可以额外下发 `filename`。
+//
+// # 为什么单独开一个方法而不是改 AddHTTPTask 的签名
+//
+// `AddHTTPTask` 的 body 形状是 A 类契约（有 `TestAddHTTPTaskBodyShape` 逐字段守着），
+// 改签名会让 A 类测试与调用点一起动。这里把"补名"作为**可选增量**加进来：
+// 不传 filename 时 body 与原来**逐字节相同**（`filename` 键根本不出现），
+// 所以既满足 B3 的补名需求，又不动已经验收过的形状。
+//
+// 纪律（`design/02 §4.5(5)`）：`filename` 只改文件名，绝不携带路径分隔符；
+// 传进来的值由 `internal/naming` 规范化过，这里不再二次处理。
+func (c *Client) AddHTTPTaskNamed(ctx context.Context, url string, filename, saveFolder *string, startLater bool) (map[string]any, error) {
 	if err := c.EnsureLogin(ctx); err != nil {
 		return nil, err
 	}
 	m := map[string]any{
 		"url":         url,
 		"start_later": startLater,
+	}
+	if filename != nil && *filename != "" {
+		m["filename"] = *filename
 	}
 	if saveFolder != nil {
 		m["save_folder"] = *saveFolder

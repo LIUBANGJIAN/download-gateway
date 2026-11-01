@@ -162,6 +162,15 @@ h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 20px 0 8px;
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .nowrap { white-space: nowrap; }
 .muted { color: var(--muted); }
+
+/* 策略「已生效」——与 .muted 并排使用，一眼区分哪几条真的在影响调度 */
+.eff-on { color: var(--ok); }
+
+/* 告警级别：颜色只用来分级，不承担"这行重不重要"的判断（那由文字说）。 */
+.lvl { font-size: 12px; padding: 1px 6px; border-radius: 9px; border: 1px solid currentColor; }
+.lvl-info { color: var(--muted); }
+.lvl-warn { color: var(--warn); }
+.lvl-error { color: var(--danger); }
 .strong { font-weight: 700; }
 .desc { color: var(--muted); font-size: 13px; }
 

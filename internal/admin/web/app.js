@@ -11,7 +11,7 @@
 // 工程上怎么保证这条边界不会被悄悄破坏：
 //   · 后端 `POST /api/admin/tasks` 已删除，前端就算想调也会拿到 405；
 //   · 本文件不定义任何 `createTask` / `submitTask` 之类的函数；
-//   · 导航里只有 总览 / 节点 / 任务 / 设置 —— 没有「添加」。
+//   · 导航里只有 总览 / 节点 / 任务 / 告警 / 设置 —— 没有「添加」。
 // ─────────────────────────────────────────────────────────────────────────────
 
 const VIEWS = {
@@ -19,6 +19,7 @@ const VIEWS = {
   '/login': 'login',
   '/nodes': 'nodes',
   '/tasks': 'tasks',
+  '/events': 'events',
   '/settings': 'settings',
 };
 const PATHS = {
@@ -26,6 +27,7 @@ const PATHS = {
   overview: '/',
   nodes: '/nodes',
   tasks: '/tasks',
+  events: '/events',
   settings: '/settings',
 };
 
@@ -33,6 +35,8 @@ const state = {
   view: 'overview',
   nodes: [],
   policies: [],
+  events: [],          // 已加载的告警行（追加上去，不覆盖）
+  eventsCursor: 0,     // 下一页游标；0 = 没有更多
   prioStep: 10,
   revealed: new Set(), // 已点开「眼睛」的节点 id（明文只在内存里，不落 localStorage）
   pendingTask: null,   // 待删除的任务
@@ -79,7 +83,7 @@ function showErr(id, msg) {
 // ── 视图切换 ────────────────────────────────────────────────────────────────
 function show(view) {
   state.view = view;
-  for (const name of ['login', 'overview', 'nodes', 'tasks', 'settings']) {
+  for (const name of ['login', 'overview', 'nodes', 'tasks', 'events', 'settings']) {
     $(`view-${name}`).hidden = name !== view;
   }
   $('banner').hidden = view === 'login';
@@ -92,6 +96,7 @@ function show(view) {
   if (view === 'overview') loadOverview();
   if (view === 'nodes') loadNodes();
   if (view === 'tasks') loadTasks();
+  if (view === 'events') loadEvents(true);
   if (view === 'settings') { loadPolicies(); loadPasswordStatus(); }
 }
 
@@ -359,6 +364,51 @@ async function submitTaskDelete(ev) {
   }
 }
 
+// ═════════════════════════════ 告警（event_log 的读入口）════════════════════
+//
+// 只读。翻页用 id 游标（`before`）而不是页码：`event_log` 一直在追加，
+// offset 分页在翻页时会重复或漏行（见 events.go 顶部说明）。
+const EVENT_LEVEL_LABEL = { info: '信息', warn: '警告', error: '错误' };
+
+async function loadEvents(reset) {
+  showErr('event-error', null);
+  if (reset) {
+    state.events = [];
+    state.eventsCursor = 0;
+  }
+  const q = new URLSearchParams();
+  const level = $('event-level').value;
+  const category = $('event-category').value;
+  if (level) q.set('level', level);
+  if (category) q.set('category', category);
+  if (!reset && state.eventsCursor) q.set('before', String(state.eventsCursor));
+  q.set('limit', '100');
+  try {
+    const data = await api(`/api/admin/events?${q}`);
+    state.events = state.events.concat(data.items || []);
+    state.eventsCursor = data.next_before || 0;
+    renderEvents();
+  } catch (e) {
+    showErr('event-error', `加载告警失败：${e.message}`);
+  }
+}
+
+function renderEvents() {
+  const idOrDash = (v) => (v == null ? '—' : escapeHtml(v));
+  $('event-rows').innerHTML = state.events.map((e) => `<tr>
+      <td class="nowrap muted">${escapeHtml(fmtTime(e.created_at))}</td>
+      <td class="nowrap"><span class="lvl lvl-${escapeHtml(e.level)}">${escapeHtml(EVENT_LEVEL_LABEL[e.level] || e.level)}</span></td>
+      <td class="nowrap">${escapeHtml(e.category)}</td>
+      <td class="nowrap">${idOrDash(e.node_id)}</td>
+      <td class="nowrap mono">${idOrDash(e.task_id)}</td>
+      <td>${escapeHtml(e.message)}</td>
+      <td class="mono muted">${escapeHtml(e.detail || '')}</td>
+    </tr>`).join('');
+  $('event-empty').hidden = state.events.length > 0;
+  // 游标为 0 = 服务端已无更早的行。这时隐藏按钮，而不是留着让人点出空结果。
+  $('event-more-box').hidden = !state.eventsCursor;
+}
+
 // ═════════════════════════════ 设置（派发策略）═════════════════════════════
 async function loadPolicies() {
   showErr('policy-error', null);
@@ -367,7 +417,13 @@ async function loadPolicies() {
     const data = await api('/api/admin/config');
     state.policies = data.policies || [];
     if (data.priority && data.priority.step) state.prioStep = data.priority.step;
-    $('policy-note').textContent = data.effective_note || '';
+    // 逐条统计而不是写死数字：策略增删后这里不会变成假话。
+    const total = state.policies.length;
+    const eff = state.policies.filter((p) => p.effective).length;
+    const tail = total === eff
+      ? '全部已接入调度内核 —— 保存后下一个调度周期（约 1 秒）即按新值选点，不需要重启。'
+      : `其余 ${total - eff} 条暂未生效，鼠标悬停行末「未生效」可看具体原因。`;
+    $('policy-note').textContent = total ? `${eff} / ${total} 条已接入调度内核 —— ${tail}` : '';
     renderPolicyTable();
     renderEnv(data.env || []);
   } catch (e) {
@@ -395,7 +451,8 @@ function renderPolicyTable() {
         </label>
         ${p.can_disable ? '' : '<span class="lock-tag">不可关闭</span>'}
       </td>
-      <td class="nowrap muted">未生效</td>
+      <td class="nowrap${p.effective ? ' eff-on' : ' muted'}"
+          title="${escapeHtml(p.effective_note || '')}">${p.effective ? '已生效' : '未生效'}</td>
     </tr>`).join('');
   bindPolicyDrag(rows);
 }
@@ -614,6 +671,12 @@ function init() {
   });
   $('taskdel-form').addEventListener('submit', submitTaskDelete);
   $('taskdel-cancel').addEventListener('click', () => $('taskdel-dialog').close());
+
+  // 告警
+  $('event-refresh').addEventListener('click', () => loadEvents(true));
+  $('event-level').addEventListener('change', () => loadEvents(true));
+  $('event-category').addEventListener('change', () => loadEvents(true));
+  $('event-more').addEventListener('click', () => loadEvents(false));
 
   // 设置
   $('policy-refresh').addEventListener('click', loadPolicies);

@@ -144,7 +144,7 @@ func TestAdminCannotCreateTask(t *testing.T) {
 // TestStaticPagesAndAssetsAreEmbedded 证明前端三件套真的编进了二进制。
 func TestStaticPagesAndAssetsAreEmbedded(t *testing.T) {
 	srv, _, _ := newAdminEnv(t)
-	for _, p := range []string{"/", "/login", "/tasks", "/nodes", "/settings", "/app.css", "/app.js"} {
+	for _, p := range []string{"/", "/login", "/tasks", "/nodes", "/settings", "/events", "/app.css", "/app.js"} {
 		status, body := doReq(t, &http.Client{}, http.MethodGet, srv.URL+p, "")
 		if status != http.StatusOK || len(body) == 0 {
 			t.Fatalf("%s 应 200 且非空，实际 %d（%d 字节）", p, status, len(body))

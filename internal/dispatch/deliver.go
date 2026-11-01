@@ -38,6 +38,15 @@ type DeliverInput struct {
 	URL    string
 	// Name 用于"没有拿到 task_id 时"的名字兜底匹配。
 	Name string
+	// Filename 是**代理前置接收的补名**（B3）：非空时随 add 请求下发，只改文件名。
+	//
+	// 空串表示不补（拿不到剧名时的正确行为 —— `design/02 §4.5(5)` 纪律 1）。
+	Filename string
+	// RetryBaseSec / RetryCapSec 是退避参数（策略 `retry_backoff` 驱动；0 ⇒ 用默认 30/1800）。
+	RetryBaseSec int64
+	RetryCapSec  int64
+	// ThrottleMultiplier 是限流冷却的额外倍率（策略 `throttle_backoff` 驱动；0 ⇒ 1.0）。
+	ThrottleMultiplier float64
 	// StartLater 是否延迟启动。
 	StartLater bool
 	// MaxConnections 最大连接数（0 表示不传）。
@@ -73,23 +82,43 @@ type DeliverResult struct {
 // BASE=30s / CAP=1800s 出自 `design/02 §2.1.4`。抖动不是美观问题：
 // 没有抖动时，一批同时失败的任务会在同一秒一起回来重投，把节点再打一次。
 func Delay(attempt int64, jitter func() float64) time.Duration {
-	const base = 30 * time.Second
-	const cap = 1800 * time.Second
+	return DelayWith(attempt, 30, 1800, 1, jitter)
+}
+
+// DelayWith 是 [Delay] 的**参数化**版本（B1.5：由策略 `retry_backoff` 驱动）。
+//
+// 三个参数为 0/负 时各自回落默认值 —— 这样"零值 Policy"与"默认策略"行为一致，
+// 任何忘填字段的调用点都不会意外改变退避节奏。
+//
+// `throttleMul` 只对**限流类**失败生效（由调用方决定是否传 >1 的倍率，
+// 见 [failWith]）：被限流时退得更久是合理的，而对 404 退更久只是浪费。
+func DelayWith(attempt, baseSec, capSec int64, throttleMul float64, jitter func() float64) time.Duration {
+	if baseSec <= 0 {
+		baseSec = 30
+	}
+	if capSec <= 0 {
+		capSec = 1800
+	}
+	if throttleMul <= 0 {
+		throttleMul = 1
+	}
 	if attempt < 1 {
 		attempt = 1
 	}
 	if attempt > 20 { // 防 1<<attempt 溢出
 		attempt = 20
 	}
+	base := time.Duration(baseSec) * time.Second
+	capDur := time.Duration(capSec) * time.Second
 	d := base * time.Duration(int64(1)<<(attempt-1))
-	if d > cap || d <= 0 {
-		d = cap
+	if d > capDur || d <= 0 {
+		d = capDur
 	}
 	j := 1.0
 	if jitter != nil {
 		j = jitter()
 	}
-	return time.Duration(float64(d) * j)
+	return time.Duration(float64(d) * j * throttleMul)
 }
 
 // Deliver 执行一次投递：分类端点 → 下发 → (必要时) read-after-write。
@@ -131,7 +160,12 @@ func Deliver(ctx context.Context, d *Deps, in DeliverInput) DeliverResult {
 	if kind == protocol.AddKindTorrent {
 		resp, err = cl.AddTorrentLinks(ctx, in.URL, nil, in.StartLater)
 	} else {
-		resp, err = cl.AddHTTPTask(ctx, in.URL, nil, in.StartLater)
+		var fname *string
+		if in.Filename != "" {
+			f := in.Filename
+			fname = &f
+		}
+		resp, err = cl.AddHTTPTaskNamed(ctx, in.URL, fname, nil, in.StartLater)
 	}
 	if err != nil {
 		return classifyError(err, in)
@@ -244,7 +278,15 @@ func failWith(class domain.ErrorClass, retryable bool, now int64, detail string,
 	if now == 0 {
 		now = time.Now().Unix()
 	}
-	res.NextRetryAt = now + int64(Delay(next, in.jitter).Seconds())
+	mul := 1.0
+	if class == domain.ErrThrottled {
+		// 限流类失败才吃额外倍率（`policy.throttle_backoff`）。
+		mul = in.ThrottleMultiplier
+		if mul <= 0 {
+			mul = 1
+		}
+	}
+	res.NextRetryAt = now + int64(DelayWith(next, in.RetryBaseSec, in.RetryCapSec, mul, in.jitter).Seconds())
 	return res
 }
 

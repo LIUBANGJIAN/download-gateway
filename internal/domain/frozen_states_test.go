@@ -10,13 +10,12 @@ import (
 
 // notYetLanded 是「冻结表里有、Go 枚举里还没有」的**显式白名单**。
 //
-// 为什么需要白名单而不是直接要求两边完全相等：B1 只落地 `failed_terminal`，
-// 其余 4 个值分别归 B2（`orphaned`）、B3（`deduplicated`）与后续（`missing_on_node`/`external`）。
+// 为什么需要白名单而不是直接要求两边完全相等：B1 落地了 `failed_terminal`，
+// B2 落地了 `orphaned`，B3 落地了 `deduplicated`；剩余 2 个归后续
+// （`missing_on_node`：节点可达但任务已不在；`external`：节点上外部创建的任务）。
 // 但**白名单必须是显式的**：否则「扩值域时随手造一个值」会让这条断言依然全绿，
 // 那它就白写了（R-6 的原始缺口正是这个形态）。
 var notYetLanded = map[InternalState]bool{
-	"orphaned":        true, // B2：绑定失效后的孤儿任务
-	"deduplicated":    true, // B3：跨来源去重命中
 	"missing_on_node": true, // 后续：节点可达但任务已不在
 	"external":        true, // 后续：节点上外部创建的任务
 }
@@ -81,9 +80,18 @@ func TestInternalStateMatchesFrozenSet(t *testing.T) {
 		}
 	}
 
-	// 方向 3：B1 声称落地的值必须真在枚举里（防止"改了 testdata 忘了改代码"）。
-	if !inGo[StateFailedTerminal] {
-		t.Error("failed_terminal 未进 allInternalStates —— B1 的终态失败会写不进库")
+	// 方向 3：分期声称落地的值必须真在枚举里（防止"改了 testdata 忘了改代码"）。
+	for _, c := range []struct {
+		state InternalState
+		who   string
+	}{
+		{StateFailedTerminal, "B1 的终态失败"},
+		{StateOrphaned, "B2 的绑定失效孤儿"},
+		{StateDeduplicated, "B3 的去重命中"},
+	} {
+		if !inGo[c.state] {
+			t.Errorf("%q 未进 allInternalStates —— %s 会写不进库", c.state, c.who)
+		}
 	}
 }
 

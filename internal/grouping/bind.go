@@ -38,9 +38,41 @@ type BindInput struct {
 	ScoreJSON string
 	// Detail 写进 `group_binding_log.detail`（建议 JSON）。
 	Detail *string
+	// DedupKeys 是 B3 的去重键，在**同一事务内**落账。
+	//
+	// 为什么必须同事务：判重（查 `dedup_index`）在事务外，落账若再晚一步，
+	// 两次提交就都会判为"未命中"⇒ 同一内容下载两遍。放在建绑事务里，
+	// 与"投递意图"一起提交，最坏情况变成"键写了但投递失败"——那是可恢复的。
+	DedupKeys []DedupKey
+	// GroupAction 是 B2 的组状态迁移（rejoin）。在**同一事务内、建绑之前**执行。
+	//
+	// 为什么只有 rejoin 走这里：split 必须发生在**选点之前**（选点要看到
+	// `group_state='split'` 才会改走评分），所以它在独立事务里先做（`engine.applySplit`）。
+	// rejoin 相反——它的目的地就是这个事务要写的那台节点，放在事务里才能保证
+	// "日志里的 to_node_id" 与 "任务实际落点" 是同一个值。
+	GroupAction *GroupAction
 	// Now 事务内**只取一次**的时间戳（喂给 task_attempt.started_at 与 group_binding_log.at，
 	// 二者必须同刻 —— 否则 INV-A3 用 `b.at <= af.dispatched_at` 重建绑定时会漏掉本次绑定）。
 	Now int64
+}
+
+// DedupKey 是一条要落账的去重键（避免 `grouping` 反向依赖 `dedup` 包）。
+type DedupKey struct {
+	Value string
+	Level int
+	Conf  string
+}
+
+// GroupAction 是一次绑定的状态迁移（只用于已经存在 `bound_node_id` 的组）。
+type GroupAction struct {
+	// Action ∈ rejoin / rebind / release（split 不在这里，见 [BindInput.GroupAction]）。
+	Action string
+	// Reason 写 `group_binding_log.reason`。
+	Reason string
+	// FromNodeID 迁移前的节点（rejoin 时即原绑定节点）。
+	FromNodeID *int64
+	// ToNodeID 迁移后的节点（rejoin 时等于 `BindInput.NodeID`）。
+	ToNodeID int64
 }
 
 // BindResult 是事务写入结果。
@@ -183,6 +215,54 @@ func BindTx(ctx context.Context, tx *sql.Tx, in BindInput) (BindResult, error) {
 		}
 	}
 
+	// ── (3b) B2 组状态迁移（rejoin / rebind）─────────────────────────────
+	//
+	// 只在"组已经有绑定"时执行；首次建绑走上面的分支，不会进这里。
+	if in.AffinityKey != "" && boundNode != nil && in.GroupAction != nil {
+		ga := in.GroupAction
+		up, err := tx.ExecContext(ctx,
+			`UPDATE task_group
+			    SET bound_node_id = ?1,
+			        group_state = 'active',
+			        bound_at = ?2,
+			        binding_epoch = binding_epoch + 1,
+			        wait_deadline = NULL,
+			        split_at = NULL,
+			        split_reason = NULL,
+			        updated_at = ?2
+			  WHERE group_id = ?3`,
+			ga.ToNodeID, now, res.GroupID,
+		)
+		if err != nil {
+			return res, fmt.Errorf("grouping: 组状态迁移(%s): %w", ga.Action, err)
+		}
+		if n, _ := up.RowsAffected(); n == 1 {
+			res.BindingEpoch = epoch + 1
+			res.WroteLog = true
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO group_binding_log
+				   (group_id, binding_epoch, from_node_id, to_node_id, action, reason, detail, at)
+				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+				res.GroupID, res.BindingEpoch, optI64(ga.FromNodeID), ga.ToNodeID,
+				ga.Action, ga.Reason, optText(in.Detail), now,
+			); err != nil {
+				return res, fmt.Errorf("grouping: 写迁移日志: %w", err)
+			}
+		}
+	}
+
+	// ── (4b) B3 去重键落账（同一事务）───────────────────────────────────
+	for _, k := range in.DedupKeys {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO dedup_index (dedup_key, level, confidence, task_id, node_id, created_at)
+			 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+			 ON CONFLICT(dedup_key) DO NOTHING`,
+			k.Value, k.Level, k.Conf, in.TaskID, in.NodeID, now,
+		); err != nil {
+			return res, fmt.Errorf("grouping: 去重落账: %w", err)
+		}
+	}
+
 	// ── (5) 决策留痕 ────────────────────────────────────────────────────
 	scoreJSON := in.ScoreJSON
 	if scoreJSON == "" {
@@ -207,7 +287,12 @@ type QueueInput struct {
 	Reason     string // 写 dispatch_log.reason（如 no_candidate / bound_capacity）
 	Candidates int
 	ScoreJSON  string
-	Now        int64
+	// WaitDeadline >0 时写入 `task_group.wait_deadline`（B2 的 strong 宽限起点）。
+	//
+	// 只写"更早"的值：已经设过 deadline 的组不该被后续任务往后推——
+	// 否则 24 集陆续到来会把这个截止时刻永远续期，strong 就等于永不拆组。
+	WaitDeadline int64
+	Now          int64
 }
 
 // QueueTx 记录一次"排队"决策。
@@ -222,6 +307,17 @@ func QueueTx(ctx context.Context, tx *sql.Tx, in QueueInput) error {
 	now := in.Now
 	if now == 0 {
 		now = time.Now().Unix()
+	}
+	if in.GroupID > 0 && in.WaitDeadline > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE task_group
+			    SET wait_deadline = ?1, updated_at = ?2
+			  WHERE group_id = ?3
+			    AND (wait_deadline IS NULL OR wait_deadline = 0)`,
+			in.WaitDeadline, now, in.GroupID,
+		); err != nil {
+			return fmt.Errorf("grouping: 写等待截止: %w", err)
+		}
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE task

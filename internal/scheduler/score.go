@@ -44,11 +44,22 @@ type Candidate struct {
 	LastAssignedAt int64
 	// Role ↦ `node.role`（来源加分用：netdisk 角色的节点天然更适合网盘来源）。
 	Role string
+	// RateLimited 表示该节点在本轮已触及"按节点限速"的上限（C6）。
+	//
+	// 它不是节点自身状态（库里的 `node.state` 不受影响）：限速是**代理侧**的
+	// 节制，改库会把"我们主动放慢"误记成"节点不健康"。
+	RateLimited bool
 }
 
 // GroupRef 是组的**决策视图**（nil 表示任务不属于任何组）。
 type GroupRef struct {
 	GroupID int64
+	// AffinityKey 组的亲和键（`dispatch_one` 用它补齐"按 group_id 读到的组"的键）。
+	//
+	// 没有它会产生一个隐蔽 bug：任务失败重试后 `task.group_id` 已非空，
+	// 调度时不再派生键 ⇒ `BindTx` 拿到的键是空串 ⇒ 既不写绑定日志、
+	// 还会把 `task.group_id` 更新成 NULL（见 `grouping.BindTx` 的 nullIfZero）。
+	AffinityKey string
 	// BoundNodeID 已绑定节点；nil 表示未绑定（首次建绑）。
 	BoundNodeID *int64
 	// BindingEpoch 当前绑定代数（建绑时 +1，写进 group_binding_log）。
@@ -59,10 +70,16 @@ type GroupRef struct {
 	MaxConcurrentInGroup int64
 	// ActiveInGroup 是该组**在途**任务数（running + dispatching）。
 	ActiveInGroup int64
-	// BindingPolicy ∈ strong/weak/manual（B1 只读不分支，分流归 B2）。
+	// BindingPolicy ∈ strong/weak/manual（B2 分流：strong 等宽限、weak 立即拆、manual 只告警）。
 	BindingPolicy string
-	// SplitPolicy ∈ none/capacity（B1 只支持 none 的语义：满容即排队）。
+	// SplitPolicy ∈ none/capacity（capacity 时满容允许拆组）。
 	SplitPolicy string
+	// WaitDeadline 是 strong 策略的等待截止时刻（0 = 尚未开始等待）。
+	//
+	// 落地列是 `task_group.wait_deadline`（DDL 里本来就是给这个用途留的）。
+	WaitDeadline int64
+	// BoundAt 是绑定建立时刻（只用于日志与"绑了多久"的可观测性）。
+	BoundAt int64
 }
 
 // ScoreWeights 是软评分权重（`design/02 §2.1.1` 的 v2 五项）。
@@ -101,6 +118,52 @@ type Policy struct {
 	SplitPolicy string
 	// MaxConcurrentInGroup 组内并发上限（默认 2；0 表示不限制）。
 	MaxConcurrentInGroup int64
+
+	// —— 以下五项由管理台的派发策略**开关**驱动（B1.5 接线）——
+	//
+	// 全部是「Disable 型」布尔：false = 该策略生效（与 B1 验收时的行为完全一致）。
+	// 用「禁用」而不是「启用」做字段，是为了让零值 `Policy{}` 也等于默认行为，
+	// 任何构造 Policy 的调用点都不会因为漏填字段而意外改变调度结果。
+
+	// DisableNodeCapacity ↦ `policy.max_concurrent` 关闭 ⇒ C4 不再按节点并发上限淘汰。
+	//
+	// ⚠️ 这是最后一道安全阀（管理台标 `dangerous`、`can_disable=false`），
+	// 接口层会拒绝关闭它；此字段存在的意义是被策略层显式测试覆盖，
+	// 而不是给用户一个"把集群压垮"的开关。
+	DisableNodeCapacity bool
+	// DisableGroupCapacity ↦ `policy.max_concurrent_in_group` 关闭 ⇒ 忽略组内并发上限。
+	DisableGroupCapacity bool
+	// IgnoreNodeWeight ↦ `policy.node_weight` 关闭 ⇒ 折算负载时分母按 1（各节点等权）。
+	IgnoreNodeWeight bool
+	// DisableSourcePinned ↦ `policy.source_pinned` 关闭 ⇒ C5 不再按来源钉住的节点收窄候选。
+	DisableSourcePinned bool
+	// DisableRoleRouting ↦ `policy.role_routing` 关闭 ⇒ 来源加分不再看节点 `role`。
+	DisableRoleRouting bool
+	// DisableGroupAffinity ↦ `policy.group_affinity` 关闭 ⇒ 不做组亲和：
+	// 已绑定的组会被**显式拆组**（写 `group_binding_log`），新成员按负载分散。
+	//
+	// ⚠️ 它必须走"拆组"而不是"直接用评分"：后者等于静默改绑（组还绑着 A、任务落 B、
+	// 日志里没有一行解释），违反 R-3。
+	DisableGroupAffinity bool
+	// BindingGraceSec 是 strong 策略的等待宽限（默认 [DefaultBindingGraceSec]）。
+	BindingGraceSec int64
+
+	// —— 以下四项由 `retry_backoff` / `throttle_backoff` / `node_rate_limit` 驱动 ——
+	//
+	// ⚠️ 与前面五个开关不同，这三个策略**不能被"关闭"成"不重试"**：
+	// 不重试等于失败即丢弃，对用户来说是数据丢失。所以它们的"关闭"语义是
+	// "退回不优化的固定行为"，而不是"把能力去掉"。
+
+	// RetryBaseSec 是重试退避的基准间隔（秒，默认 30）。
+	RetryBaseSec int64
+	// RetryCapSec 是退避上限（秒，默认 1800）。
+	RetryCapSec int64
+	// ThrottleMultiplier 是限流冷却的额外倍率（默认 1.0；策略关闭时恒为 1.0）。
+	//
+	// >1 表示"退得更久"（节点被限流时更保守），<1 表示"更快回来试"。
+	ThrottleMultiplier float64
+	// NodeRateLimitPerMin >0 时启用按节点限速（每分钟最多下发多少个）。
+	NodeRateLimitPerMin int64
 }
 
 // DefaultPolicy 返回设计默认策略。
@@ -125,6 +188,11 @@ type PickInput struct {
 	PinnedNodeID *int64
 	// Group 组视图；nil = 任务不属于任何组。
 	Group *GroupRef
+	// BoundNode 是组绑定节点的候选视图（`Group.BoundNodeID` 对应的那一台；找不到为 nil）。
+	//
+	// 单独给一个字段而不是让 [ResolveBinding] 自己遍历：失效判定需要的是
+	// "绑定节点现在能不能用"，而不是"全量候选里有没有它"——后者在有过滤时会被混淆。
+	BoundNode *Candidate
 	// Nodes 全部节点（未过滤）。
 	Nodes []Candidate
 	// Reserved 是"已决定但节点尚未确认"的内存预留（design/04 §8.3 的 `reserved_pending`）。
@@ -155,6 +223,10 @@ type ScoredNode struct {
 // LoadNorm 是负载项：`α·active/weight + β·pending_bytes/weight`。
 func LoadNorm(n Candidate, in PickInput) float64 {
 	w := n.Weight
+	// `policy.node_weight` 关闭 ⇒ 各节点等权，权重字段退化成 1。
+	if in.Cfg.IgnoreNodeWeight {
+		w = 1
+	}
 	if w <= 0 {
 		w = 1
 	}
@@ -193,7 +265,8 @@ func SourceBonus(n Candidate, in PickInput) float64 {
 	if in.SourceStrategy != "affinity" {
 		return 0
 	}
-	if n.Role == "netdisk" {
+	// `policy.role_routing` 关闭 ⇒ 不再按节点角色给来源加分。
+	if n.Role == "netdisk" && !in.Cfg.DisableRoleRouting {
 		return 1.0
 	}
 	// 来源被钉在某个节点时，那个节点也拿加分（与 C5 同向，不冲突）。
@@ -302,10 +375,13 @@ func HardFilter(in PickInput) []Candidate {
 		if in.Now < n.ThrottleUntil { // C3
 			continue
 		}
-		if n.Active >= n.MaxConcurrent { // C4
+		if !in.Cfg.DisableNodeCapacity && n.Active >= n.MaxConcurrent { // C4
 			continue
 		}
-		if in.SourceStrategy == "pinned" && in.PinnedNodeID != nil && n.NodeID != *in.PinnedNodeID { // C5
+		if !in.Cfg.DisableSourcePinned && in.SourceStrategy == "pinned" && in.PinnedNodeID != nil && n.NodeID != *in.PinnedNodeID { // C5
+			continue
+		}
+		if n.RateLimited { // C6（代理侧限速）
 			continue
 		}
 		out = append(out, n)
@@ -322,10 +398,12 @@ func excludedReason(n Candidate, in PickInput) string {
 		return "C2_not_online:" + n.State
 	case in.Now < n.ThrottleUntil:
 		return fmt.Sprintf("C3_throttled_until:%d", n.ThrottleUntil)
-	case n.Active >= n.MaxConcurrent:
+	case !in.Cfg.DisableNodeCapacity && n.Active >= n.MaxConcurrent:
 		return "C4_capacity_full"
-	case in.SourceStrategy == "pinned" && in.PinnedNodeID != nil && n.NodeID != *in.PinnedNodeID:
+	case !in.Cfg.DisableSourcePinned && in.SourceStrategy == "pinned" && in.PinnedNodeID != nil && n.NodeID != *in.PinnedNodeID:
 		return "C5_source_pinned_elsewhere"
+	case n.RateLimited:
+		return "C6_node_rate_limited"
 	default:
 		return ""
 	}

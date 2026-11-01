@@ -115,6 +115,22 @@ expect_absent() {
   fi
 }
 
+# 用法：expect_eq <描述> <期望值> <实际值>
+# 与 expect 的区别：不打「（HTTP x）」，用于非状态码的数值/计数断言。
+expect_eq() {
+  local desc="$1" want="$2" got="$3"
+  if [ "$got" = "$want" ]; then
+    pass "$desc（= $got）"
+  else
+    fail "$desc — 期望 $want，实际 $got"
+  fi
+}
+
+# 用法：count_of <文本> <子串> —— 输出出现次数（去掉 grep 失败时的空输出）
+count_of() {
+  printf '%s' "$1" | grep -oF -- "$2" 2>/dev/null | wc -l | tr -d ' '
+}
+
 echo "==================================================================="
 echo " 冒烟目标镜像：${IMAGE}"
 echo "==================================================================="
@@ -292,16 +308,16 @@ echo "── 7. 管理口 · 页面与静态资源 ─────────�
 # 前端三件套（index.html / app.css / app.js）是用 `include_str!` **编进二进制**的。
 # 这件事的失败模式很隐蔽：文件没打进镜像，接口照样全绿，只有人打开浏览器才发现是白页。
 # 所以这里逐个把它们 GET 一遍 —— 这是唯一能证明"它们真在镜像里"的办法。
-for asset in / /login /tasks /nodes /settings /app.css /app.js; do
+for asset in / /login /tasks /nodes /events /settings /app.css /app.js; do
   resp="$(curl -s --max-time 10 -w '\n%{http_code}' "${ADM}${asset}")"
   code="$(printf '%s' "$resp" | tail -1)"
   expect "GET ${ADM}${asset}" 200 "$code" "$(printf '%s' "$resp" | sed '$d' | head -c 200)"
 done
 
-# 首页必须含四个导航入口 + 那条"调度未启用"横幅。
-# 导航只剩三个 = 前端没更新到位（比如节点/设置页根本没做出来）。
+# 首页必须含五个导航入口 + 那条"调度已启用"横幅。
+# 少一个 = 前端没更新到位（比如节点/告警页根本没做出来）。
 home="$(curl -s --max-time 10 "${ADM}/")"
-for view in overview nodes tasks settings; do
+for view in overview nodes tasks events settings; do
   expect_contains "管理台导航含 data-view=${view}" "$home" "data-view=\"${view}\""
 done
 # 首页横幅必须如实反映**当前**的调度状态。B1 落地前这里锁的是「仅受理任务」，
@@ -320,12 +336,28 @@ expect_absent "管理台不得引用添加任务页" "$home" "/tasks/new"
 
 echo
 echo "── 8. 管理口 · 只读接口 ────────────────────────────────────────"
-for path in summary nodes config; do
+for path in summary nodes config events; do
   resp="$(curl -s --max-time 10 -b "$COOKIE_JAR" -w '\n%{http_code}' "${ADM}/api/admin/${path}")"
   code="$(printf '%s' "$resp" | tail -1)"
   payload="$(printf '%s' "$resp" | sed '$d')"
   expect "GET ${ADM}/api/admin/${path}" 200 "$code" "$payload"
 done
+
+# 告警接口（`event_log` 的读入口）：契约是 `items` + `next_before` 游标。
+# 这两个字段名一旦漂移，前端「加载更早」会静默失效（永远翻不动、也不报错）——
+# 所以按字段名锁，而不是只锁 200。
+resp="$(curl -s --max-time 10 -b "$COOKIE_JAR" "${ADM}/api/admin/events?limit=5")"
+expect_contains "告警接口返回 items 数组" "$resp" '"items"'
+expect_contains "告警接口返回 next_before 游标" "$resp" '"next_before"'
+# 非法筛选值必须 422（而不是 500 + SQLite 约束消息）。
+resp="$(curl -s --max-time 10 -b "$COOKIE_JAR" -w '\n%{http_code}' \
+  "${ADM}/api/admin/events?level=fatal")"
+code="$(printf '%s' "$resp" | tail -1)"
+expect "GET ${ADM}/api/admin/events?level=fatal（非法级别）" 422 "$code" "$(printf '%s' "$resp" | sed '$d')"
+# 未登录必须 401：这是**审计**数据，泄露节点/任务 id 与失败原因等于泄露拓扑。
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' "${ADM}/api/admin/events")"
+code="$(printf '%s' "$resp" | tail -1)"
+expect "GET ${ADM}/api/admin/events（未登录）" 401 "$code" "$(printf '%s' "$resp" | sed '$d')"
 
 resp="$(curl -s --max-time 10 -b "$COOKIE_JAR" "${ADM}/api/admin/nodes")"
 expect_contains "节点列表返回 items 数组" "$resp" '"items"'
@@ -458,6 +490,42 @@ code="$(printf '%s' "$resp" | tail -1)"
 expect "PUT ${ADM}/api/admin/config（关闭安全阀）" 422 "$code" "$(printf '%s' "$resp" | sed '$d')"
 
 echo
+echo "── 11b. 策略「生效与否」必须如实标注 ──────────────────────────"
+# 这一节锁的是**两次**真实谎报：
+#   ① 12 条策略全标 `effective:false`，而内核对其中 8 条确实会读；
+#   ② 收尾后 12 条全接，本节若还写着「8 条生效 / 4 条未生效」，就变成反向谎报。
+# 反向谎报同样有害 —— 把「已生效」说成「未生效」，用户就不敢调了。
+#
+# 所以断言的目标不是「历史数字」，而是**「生效条数 == 策略总条数」且每条都带具体说明**：
+# 将来加一条策略却忘了接线（`effective` 退回 false、`unsupportedPolicyNotes` 没补），
+# 这里会先红，而不必等到用户在生产上调完策略发现没变化。
+#
+# Go 侧 map 序列化按字母序，所以字段顺序是
+#   ... "effective":<bool>,"effective_note":"<说明>", ...
+# 顺序稳定，可以据此断言「生效状态」与「说明文案」是成对出现的。
+resp="$(curl -s --max-time 10 -b "$COOKIE_JAR" "${ADM}/api/admin/config")"
+
+# ⚠️ 不能对 `"key"` / `"effective"` 做全局计数：同一响应里的 `env` 数组
+# （运行环境快照，12 条）也带 `key` 与 `effective` 两个字段，全局数会把它们
+# 一起算进来 —— 12 条会数成 24 条。第一版断言就是这么错的。
+#
+# 改用只有策略条目才有的锚点：
+#   `"category"`           仅出现在策略条目（env 用的是 `risk`）
+#   `"effective":true,"effective_note":"已生效：...`
+#                          仅出现在策略条目（env 的 effective 后面紧跟 key）
+expect_eq "策略表共 12 条" 12 "$(count_of "$resp" '"category":')"
+expect_eq "12 条全部接入调度内核（effective=true）" 12 \
+  "$(count_of "$resp" '"effective":true,"effective_note":"已生效：')"
+expect_eq "每条都写清「读在哪一步」" 12 \
+  "$(count_of "$resp" '"effective":true,"effective_note":"已生效：调度内核每次选点都读取本项')"
+# 未生效条目必须为 0。锚点用 `"effective":false,"effective_note":"暂未生效："`：
+# env 数组里的 `effective` 后面跟的是 `risk`，不会命中这条。
+expect_eq "没有一条被标成未生效" 0 \
+  "$(count_of "$resp" '"effective":false,"effective_note":"暂未生效：')"
+expect_absent "说明不得再推给『功能没做』" "$resp" '尚未落地'
+expect_absent "说明不得出现空文案" "$resp" '"effective_note":""'
+
+echo
 echo "── 12. 实测证据（这一节是给「空转的绿」上的锁）──────────────────"
 # 起因：smoke 作业第一次跑 CI 时**全绿**，但总耗时 13 秒、"容器冒烟"这一步只占 3 秒 ——
 # 对「拉镜像 + 启容器 + 40 多条 HTTP 断言」来说快得可疑。
@@ -467,8 +535,9 @@ echo "── 12. 实测证据（这一节是给「空转的绿」上的锁）─
 # **注解（annotation）却是公开可读的** ——
 # 所以把"我到底测了哪一枚镜像、跑了多少条断言、应用自报什么版本"做成 ::notice。
 # 这样任何人（包括没有仓库权限的人）都能从 run 页面直接读到，不必依赖日志。
-# 下限取 40：当前断言规模是静态 50 个调用点（`expect` 22 / `expect_contains` 21 /
-# `expect_absent` 7），循环展开后运行时更多（2 个端口、7 个静态资源、4 个导航、3 个只读路径）。
+# 下限取 40：当前断言规模是静态 70 个调用点（`expect` 27 / `expect_eq` 4 /
+# `expect_contains` 27 / `expect_absent` 12），循环展开后运行时更多
+# （2 个端口、8 个静态资源、5 个导航、4 个只读路径）。
 # 取一个有富余的值，而不是贴着实际条数 —— 将来正常增删几条断言不应该把这条锁弄红；
 # 它的职责只是抓"脚本半途没跑起来"，不是精确对账。
 # 实测锚点：2026-09-30 的 CI 运行报出 66 条；之后加入「版本号注入生效」与

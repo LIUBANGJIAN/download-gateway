@@ -20,6 +20,7 @@
       <button class="nav-btn" data-view="overview">总览</button>
       <button class="nav-btn" data-view="nodes">节点</button>
       <button class="nav-btn" data-view="tasks">任务</button>
+      <button class="nav-btn" data-view="events">告警</button>
       <button class="nav-btn" data-view="settings">设置</button>
       <button class="nav-btn" id="logout-btn">退出</button>
     </nav>
@@ -111,6 +112,52 @@
       </table>
     </div>
     <div id="task-empty" class="empty" hidden>暂无任务。任务请通过对外的 aria2 / BitComet 协议口提交。</div>
+  </section>
+
+  <!-- ============ 告警（event_log 的读入口）============ -->
+  <!-- 这里只**读**，不提供任何"标记已读/清除"动作：
+       event_log 是审计证据，能被界面改写的审计就不是证据。
+       要归档请导出后另行处理。 -->
+  <section id="view-events" class="view" hidden>
+    <div class="view-head">
+      <h2>告警</h2>
+      <div class="view-actions">
+        <select id="event-level" aria-label="按级别筛选">
+          <option value="">全部级别</option>
+          <option value="warn">警告</option>
+          <option value="error">错误</option>
+          <option value="info">信息</option>
+        </select>
+        <select id="event-category" aria-label="按类别筛选">
+          <option value="">全部类别</option>
+          <option value="node">节点</option>
+          <option value="task">任务</option>
+          <option value="dedup">去重</option>
+          <option value="group">分组</option>
+          <option value="system">系统</option>
+          <option value="security">安全</option>
+        </select>
+        <button id="event-refresh">刷新</button>
+      </div>
+    </div>
+    <p class="hint">
+      节点离线、投递失败、绑定失效拆组、去重命中、重试耗尽都会记在这里。
+      <b>只读</b>：审计日志能被界面改写就不是证据了。
+      按时间倒序，一次最多 500 条，翻页用游标（<code>before</code>）而不是页码 —— 日志一直在追加，页码会重复或漏行。
+    </p>
+    <div id="event-error" class="error-bar" hidden></div>
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr><th>时间</th><th>级别</th><th>类别</th><th>节点</th><th>任务</th><th>内容</th><th>详情</th></tr>
+        </thead>
+        <tbody id="event-rows"></tbody>
+      </table>
+    </div>
+    <div id="event-empty" class="empty" hidden>没有符合条件的记录。</div>
+    <div class="view-actions" id="event-more-box" hidden>
+      <button id="event-more">加载更早</button>
+    </div>
   </section>
 
   <!-- ============ 设置 ============ -->

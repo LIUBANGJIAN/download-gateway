@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +27,30 @@ type fakeNode struct {
 	mu    sync.Mutex
 	tasks []map[string]any
 	next  int
+	// failSubstr 非空时，URL 含该子串的投递一律返回 403（permanent 失败）。
+	//
+	// 用于 B2-AC4「单集失败不牵连其他集」：必须让**同一组里的某一集**投递失败，
+	// 才能验证失败不会把整组拖去重绑。
+	failSubstr string
+	// filenames 记录每次 add 请求里带的 `filename`（B3 命名器的判据）。
+	filenames []string
+}
+
+// setFailSubstr 设置投递失败注入。
+func (f *fakeNode) setFailSubstr(s string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failSubstr = s
+}
+
+// lastFilename 返回最后一次 add 请求里的 filename（空表示没传）。
+func (f *fakeNode) lastFilename() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.filenames) == 0 {
+		return ""
+	}
+	return f.filenames[len(f.filenames)-1]
 }
 
 func newFakeNode(t *testing.T) *fakeNode {
@@ -49,6 +74,20 @@ func newFakeNode(t *testing.T) *fakeNode {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.mu.Lock()
+		urlStr, _ := body["url"].(string)
+		if f.failSubstr != "" && strings.Contains(urlStr, f.failSubstr) {
+			f.mu.Unlock()
+			// 走 `server_file_not_found`（不可重试的终态），才能验证"一集失败"。
+			// ⚠️ 值必须是小写：节点的 error_code 就是 `task.error_class` 的取值集，
+			// 大写串会被 MapErrorClass 归成 `unknown`（可重试）⇒ 测的就不是终态失败了。
+			writeJSON(w, map[string]any{"error_code": "server_file_not_found"})
+			return
+		}
+		if fn, ok := body["filename"].(string); ok {
+			f.filenames = append(f.filenames, fn)
+		} else {
+			f.filenames = append(f.filenames, "")
+		}
 		f.next++
 		id := f.next
 		f.tasks = append(f.tasks, map[string]any{

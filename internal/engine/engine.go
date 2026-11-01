@@ -28,6 +28,7 @@ import (
 	"github.com/LIUBANGJIAN/download-gateway/internal/domain"
 	"github.com/LIUBANGJIAN/download-gateway/internal/grouping"
 	"github.com/LIUBANGJIAN/download-gateway/internal/ids"
+	"github.com/LIUBANGJIAN/download-gateway/internal/naming"
 	"github.com/LIUBANGJIAN/download-gateway/internal/scheduler"
 	"github.com/LIUBANGJIAN/download-gateway/internal/secret"
 	"github.com/LIUBANGJIAN/download-gateway/internal/store"
@@ -80,6 +81,13 @@ type Engine struct {
 	mu           sync.Mutex
 	reserved     map[int64]int64
 	lastAssigned map[int64]int64
+	// nodeSend 是"按节点限速"（策略 `node_rate_limit`）的滑动窗口：
+	// node_id → 最近 60 秒内的投递时刻（升序）。
+	//
+	// 放在内存而不是库里，理由与 `lastAssigned` 相同（规格 C-04）：它只是
+	// "过去一分钟我们发了多少"的近似，重启后从零开始最多让第一个分钟多发几个，
+	// 不值得为它加一列并承担写放大。
+	nodeSend map[int64][]int64
 
 	// now 是可注入的时钟（测试用）。
 	now func() int64
@@ -128,6 +136,7 @@ func New(st *store.Store, secrets *secret.SecretBox, cfg Config) *Engine {
 		log:          slog.Default(),
 		reserved:     map[int64]int64{},
 		lastAssigned: map[int64]int64{},
+		nodeSend:     map[int64][]int64{},
 		now:          ids.NowSecs,
 	}
 }
@@ -251,6 +260,9 @@ func (e *Engine) TickOnce(ctx context.Context) error {
 		return nil
 	}
 
+	// 先按管理台的当前配置刷新策略：用户改完下一秒就生效，不需要重启。
+	e.reloadPolicy(ctx)
+
 	now := e.now()
 	tasks, err := dispatch.LoadQueuedTasks(ctx, e.st, now, e.cfg.Batch)
 	if err != nil {
@@ -260,11 +272,20 @@ func (e *Engine) TickOnce(ctx context.Context) error {
 		return nil
 	}
 
+	// tick 级预留：本 tick 内派发出去的任务要**一直占着**预留位，直到整轮结束。
+	//
+	// 为什么不能"派一个就回滚一个"（B1 的写法）：`nodes` 是本 tick 开头读的快照，
+	// 里面的 `active` 不含本轮新派出的任务。若立刻回滚预留，同一 tick 的后续任务
+	// 会认为节点仍然空闲 ⇒ 24 集同毫秒到达时会一起挤过 `max_concurrent`（B2-AC5）。
+	baseline := e.snapshotReserved()
+	defer e.restoreReserved(baseline)
+
 	nodes, err := dispatch.LoadCandidates(ctx, e.st, e.cfg.Policy.Params.DLUnknownBytes)
 	if err != nil {
 		return err
 	}
 	nodes = e.applyRuntimeHints(nodes)
+	nodes = e.applyRateLimit(nodes, now)
 	if len(nodes) == 0 {
 		// 一个节点都没有：不写 dispatch_log（否则每 tick 都往库里塞一行 queued）。
 		// 用户看到的现象是"任务一直在排队"，这正是事实。
@@ -305,25 +326,53 @@ func (e *Engine) dispatchOne(ctx context.Context, t dispatch.QueuedTask, nodes [
 			return err
 		}
 		group = g
-	}
-	if group == nil && nameForGroup != "" {
-		// ⚠️ 与规格 §1.3 的差异（有意）：规格要求"接单时"派生组键，本实现放在**调度时**。
-		// 信息源完全相同（`task.name` 是推送请求里用户给的名字，入库后不会再变），
-		// 但放在这里能避免在 4 个入库入口重复实现、也能不改 A 类的 `CreateTask`
-		// （它刻意不用事务）。规格要防的是"事后去节点读任务名反推"，本实现不读节点。
-		kr := grouping.DeriveKey(nameForGroup, deref(t.SourceKey), e.cfg.KeyOptions)
-		key, layer, conf = kr.Key, kr.Layer, kr.Confidence
-		if key != "" {
-			g, err := dispatch.LoadGroupByKey(ctx, e.st, key)
-			if err != nil {
-				return err
-			}
-			group = g
+		if g != nil {
+			// 组已存在（失败重试 / 已被别的集建好）⇒ 直接沿用它的键。
+			// 不补这一步会让 BindTx 既不写绑定日志、又把 task.group_id 清成 NULL。
+			key = g.AffinityKey
 		}
+	}
+	// ⚠️ 与规格 §1.3 的差异（有意）：规格要求"接单时"派生组键，本实现放在**调度时**。
+	// 信息源完全相同（`task.name` 是推送请求里用户给的名字，入库后不会再变），
+	// 但放在这里能避免在 4 个入库入口重复实现、也能不改 A 类的 `CreateTask`
+	// （它刻意不用事务）。规格要防的是"事后去节点读任务名反推"，本实现不读节点。
+	//
+	// 两级尝试（第二级是 B3 补名需要的）：
+	//
+	//	① `task.name`（上游给的名字，最准）
+	//	② `url_raw` 的 basename —— 上游只发 URL 时名字可能是 `01.ts`，
+	//	   而 URL 里往往带着完整剧名。不回退这一级，"补名"就永远拿不到剧名。
+	derived := false
+	for _, src := range []string{nameForGroup, t.URLRaw} {
+		if group != nil || derived || src == "" {
+			continue
+		}
+		kr := grouping.DeriveKey(src, deref(t.SourceKey), e.cfg.KeyOptions)
+		if kr.Key == "" {
+			continue
+		}
+		key, layer, conf = kr.Key, kr.Layer, kr.Confidence
+		derived = true
+		g, err := dispatch.LoadGroupByKey(ctx, e.st, key)
+		if err != nil {
+			return err
+		}
+		group = g
 		if kr.EpisodeNo != nil && t.EpisodeNo == nil {
 			t.EpisodeNo = kr.EpisodeNo
 		}
 		_ = conf
+	}
+
+	// ── B3 判重 ─────────────────────────────────────────────────────────
+	//
+	// 位置有讲究：必须在**选点之前**。判重命中而要跳过的任务不该占用任何候选名额，
+	// 也不该在 `dispatch_log` 里留下 `assigned`（那会让"这集下过没有"更难回答）。
+	dkeys := dedupKeys(t)
+	if skip, err := e.decideDedup(ctx, t, dkeys, now); err != nil {
+		return err
+	} else if skip {
+		return nil
 	}
 
 	// ── 选点 ────────────────────────────────────────────────────────────
@@ -343,27 +392,47 @@ func (e *Engine) dispatchOne(ctx context.Context, t dispatch.QueuedTask, nodes [
 		Now:            now,
 		Cfg:            e.cfg.Policy,
 	}
+	in.BoundNode = boundCandidate(group, nodes)
 	dec := scheduler.Pick(in)
+
+	// ── B2 拆组：必须先留痕，再改走评分 ──────────────────────────────────
+	//
+	// 顺序不可换。若先选点、后补日志，那么"决策依据的组状态"与"库里的组状态"
+	// 就不一致，B2-AC1（库字段与最新日志一致）会在并发时随机为红。
+	if dec.Kind == scheduler.DecBindingInvalid && dec.Binding.Action == scheduler.BindSplit {
+		if err := e.applySplit(ctx, dec.Binding, group, now); err != nil {
+			return err
+		}
+		in.Group = group
+		dec = scheduler.Pick(in)
+	}
 
 	// ── 排队分支 ────────────────────────────────────────────────────────
 	if dec.Kind != scheduler.DecScored && dec.Kind != scheduler.DecAffinityHit {
 		reason := dec.Reason
-		if dec.Kind == scheduler.DecSplitForced {
-			// B1 不实现拆分（属 B2）。这里**不能**自行改派：那就是静默改绑。
-			reason = "split_not_implemented:" + dec.Reason
-			e.log.Warn("组已满容且 split_policy=capacity，但拆分未实现（B2）；按排队处理",
-				"task", t.TaskID, "group", groupIDOf(group))
+		if dec.Kind == scheduler.DecBindingInvalid || dec.Kind == scheduler.DecAffinityWait {
+			if dec.Binding.Reason != "" {
+				reason = dec.Binding.Reason
+			}
 		}
 		var gid int64
 		if group != nil {
 			gid = group.GroupID
 		}
-		return e.st.InTx(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		if err := e.st.InTx(ctx, func(txCtx context.Context, tx *sql.Tx) error {
 			return grouping.QueueTx(txCtx, tx, grouping.QueueInput{
 				TaskID: t.TaskID, GroupID: gid, Reason: reason,
 				Candidates: len(dec.Evaluated), ScoreJSON: scoreJSON(dec), Now: now,
+				WaitDeadline: dec.Binding.Deadline,
 			})
-		})
+		}); err != nil {
+			return err
+		}
+		// 告警在事务之后写：`Alert` 只在"首次发现失效"时为真，所以不会刷屏。
+		if dec.Binding.Alert {
+			dispatch.LogEvent(ctx, e.st, "warn", "group", dec.NodeID, t.TaskID, dec.Binding.Note)
+		}
+		return nil
 	}
 
 	// ── 建绑 + 投递意图（事务）─────────────────────────────────────────
@@ -374,6 +443,10 @@ func (e *Engine) dispatchOne(ctx context.Context, t dispatch.QueuedTask, nodes [
 	}
 	detail := detailJSON(key, layer, group)
 
+	var groupAction *grouping.GroupAction
+	if dec.Binding.Action == scheduler.BindRejoin {
+		groupAction = rejoinAction(dec.Binding, group, dec.NodeID)
+	}
 	err = e.st.InTx(ctx, func(txCtx context.Context, tx *sql.Tx) error {
 		res, err := grouping.BindTx(txCtx, tx, grouping.BindInput{
 			TaskID:         t.TaskID,
@@ -386,6 +459,8 @@ func (e *Engine) dispatchOne(ctx context.Context, t dispatch.QueuedTask, nodes [
 			Candidates:     len(dec.Evaluated),
 			ScoreJSON:      scoreJSON(dec),
 			Detail:         detail,
+			GroupAction:    groupAction,
+			DedupKeys:      toGroupingDedupKeys(dkeys),
 			Now:            now,
 		})
 		if err != nil {
@@ -402,14 +477,41 @@ func (e *Engine) dispatchOne(ctx context.Context, t dispatch.QueuedTask, nodes [
 	}
 
 	// 提交后才占位：`reserved_pending` 的定义是"已决定但未确认"。
+	// 回滚交给 [TickOnce] 的 tick 级 defer（理由见那里的注释）。
 	e.reserve(dec.NodeID, +1)
 	e.markAssigned(dec.NodeID, now)
-	defer e.reserve(dec.NodeID, -1)
+	e.recordSend(dec.NodeID, now)
+
+	// ── 补名（B3，代理前置接收）──────────────────────────────────────────
+	//
+	// 只对 HTTP/FTP 补：BT 的落盘名由 torrent 元信息决定，传 filename 没有意义。
+	// 纪律 5：**先落盘"本次补名的决策"，再下发** —— 否则补错了（把 A 剧的剧名
+	// 补到 B 剧上）就无法事后追溯与批量纠正。
+	filename := ""
+	if t.Kind == "http" || t.Kind == "ftp" || t.Kind == "" {
+		nm := naming.Build(naming.Input{
+			Stem:       stemOf(key),
+			Season:     seasonOf(key),
+			Episode:    derefI64(t.EpisodeNo),
+			OriginName: deref(t.Name),
+			URL:        t.URLRaw,
+		})
+		filename = nm.Filename
+		if filename != "" {
+			dispatch.LogEventDetail(ctx, e.st, "info", "group", dec.NodeID, t.TaskID,
+				fmt.Sprintf("补名：%s → %s（来源=grouping_stem）", nm.Origin, filename),
+				nm.Origin)
+		}
+	}
 
 	// ── 投递（事务外，网络 I/O）─────────────────────────────────────────
 	res := dispatch.Deliver(ctx, e.deps, dispatch.DeliverInput{
 		NodeID: dec.NodeID, TaskID: t.TaskID, URL: t.URLRaw,
-		Name: nameForGroup, AttemptNo: attemptNo, MaxAttempts: t.MaxAttempts, Now: now,
+		Name: nameForGroup, Filename: filename,
+		AttemptNo: attemptNo, MaxAttempts: t.MaxAttempts, Now: now,
+		RetryBaseSec:       e.cfg.Policy.RetryBaseSec,
+		RetryCapSec:        e.cfg.Policy.RetryCapSec,
+		ThrottleMultiplier: e.cfg.Policy.ThrottleMultiplier,
 	})
 
 	// ── 结果写回 ────────────────────────────────────────────────────────
@@ -489,6 +591,72 @@ func (e *Engine) markAssigned(nodeID, now int64) {
 	e.lastAssigned[nodeID] = now
 }
 
+// applyRateLimit 把"本分钟已发够"的节点标成 `RateLimited`（C6）。
+//
+// 只在策略给出的上限 >0 时生效；上限为 0 表示"用户关掉了这条策略"，
+// 此时一个标记都不打（连 map 都不碰，避免留下永远不清理的键）。
+func (e *Engine) applyRateLimit(nodes []scheduler.Candidate, now int64) []scheduler.Candidate {
+	perMin := e.cfg.Policy.NodeRateLimitPerMin
+	if perMin <= 0 {
+		return nodes
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cutoff := now - 60
+	for i := range nodes {
+		sends := e.nodeSend[nodes[i].NodeID]
+		n := 0
+		for _, ts := range sends {
+			if ts > cutoff {
+				n++
+			}
+		}
+		if int64(n) >= perMin {
+			nodes[i].RateLimited = true
+		}
+	}
+	return nodes
+}
+
+// recordSend 记一次投递（滑动窗口用）。
+func (e *Engine) recordSend(nodeID, now int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cutoff := now - 60
+	sends := e.nodeSend[nodeID]
+	// 顺手裁掉过期项：窗口最多 60 秒，元素个数上限就是 perMin（≤600），不会涨。
+	keep := sends[:0]
+	for _, ts := range sends {
+		if ts > cutoff {
+			keep = append(keep, ts)
+		}
+	}
+	e.nodeSend[nodeID] = append(keep, now)
+}
+
+// restoreReserved 把预留表恢复成 tick 开始时的快照。
+//
+// 为什么不逐个 `reserve(-1)`：本轮可能因为错误提前返回，逐条回滚会漏。
+// 直接覆盖成快照是幂等的，且语义正好是"本轮的所有临时占位作废"。
+func (e *Engine) restoreReserved(baseline map[int64]int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.reserved = baseline
+}
+
+// boundCandidate 找出组绑定节点对应的候选（无绑定或节点已删 ⇒ nil）。
+func boundCandidate(g *scheduler.GroupRef, nodes []scheduler.Candidate) *scheduler.Candidate {
+	if g == nil || g.BoundNodeID == nil {
+		return nil
+	}
+	for i := range nodes {
+		if nodes[i].NodeID == *g.BoundNodeID {
+			return &nodes[i]
+		}
+	}
+	return nil
+}
+
 // snapshotReserved 复制一份预留表（选点是纯函数，不该持有锁）。
 func (e *Engine) snapshotReserved() map[int64]int64 {
 	e.mu.Lock()
@@ -515,9 +683,19 @@ func (e *Engine) applyRuntimeHints(nodes []scheduler.Candidate) []scheduler.Cand
 }
 
 // scoreJSON 序列化决策留痕。
+//
+// 额外带 `binding` 一栏：B2 之后"为什么这集没落到绑定节点"的原因（strong 等待中 /
+// weak 立即拆 / manual 只告警）必须能从 `dispatch_log` 里读出来，
+// 否则排障只能靠猜。
 func scoreJSON(d scheduler.Decision) string {
-	return grouping.MarshalEvaluated(d.Kind.String(), d.Reason, d.NodeID, d.Evaluated,
-		map[string]any{"weights": scheduler.DefaultWeights()})
+	extra := map[string]any{"weights": scheduler.DefaultWeights()}
+	if d.Binding.Action != scheduler.BindHold || d.Binding.Reason != "" {
+		extra["binding"] = map[string]any{
+			"action": d.Binding.Action.String(),
+			"reason": d.Binding.Reason,
+		}
+	}
+	return grouping.MarshalEvaluated(d.Kind.String(), d.Reason, d.NodeID, d.Evaluated, extra)
 }
 
 // detailJSON 生成 `group_binding_log.detail`（规格 C-17 建议的 JSON）。
@@ -536,6 +714,26 @@ func detailJSON(key, layer string, g *scheduler.GroupRef) *string {
 	}
 	s := string(b)
 	return &s
+}
+
+// stemOf 从 affinity_key（`name:{stem}|{season}`）里取剧名段。
+func stemOf(key string) string {
+	if key == "" {
+		return ""
+	}
+	s := strings.TrimPrefix(key, "name:")
+	if i := lastPipe(s); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+// derefI64 取 int64 指针的值（nil ⇒ 0）。
+func derefI64(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 // seasonOf 从 affinity_key 里取季段（`...|S01`）。

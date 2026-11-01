@@ -64,6 +64,7 @@ func NewRouter(st *state.AdminState, version string) http.Handler {
 	mux.HandleFunc("GET /tasks", s.page(web.Index))
 	mux.HandleFunc("GET /nodes", s.page(web.Index))
 	mux.HandleFunc("GET /settings", s.page(web.Index))
+	mux.HandleFunc("GET /events", s.page(web.Index))
 	mux.HandleFunc("GET /app.css", s.asset(web.CSS, web.ContentTypeCSS))
 	mux.HandleFunc("GET /app.js", s.asset(web.JS, web.ContentTypeJS))
 	// ---- 会话 ----
@@ -93,6 +94,9 @@ func NewRouter(st *state.AdminState, version string) http.Handler {
 	mux.HandleFunc("POST /api/admin/nodes/{id}/enabled", s.nodesSetEnabled)
 	mux.HandleFunc("POST /api/admin/nodes/{id}/secret", s.nodesRevealSecret)
 	// ---- 派发 / 负载策略 ----
+	// 告警/审计查询（`event_log` 的读入口）。
+	mux.HandleFunc("GET /api/admin/events", s.eventsList)
+
 	mux.HandleFunc("GET /api/admin/config", s.configGet)
 	mux.HandleFunc("PUT /api/admin/config", s.configPut)
 

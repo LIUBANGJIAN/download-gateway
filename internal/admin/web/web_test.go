@@ -56,10 +56,14 @@ func TestEmbeddedMatchesLocalStaticFiles(t *testing.T) {
 // 逐字节一致这条判据在这里已经失效，但"随便改"也不行。
 //
 // 所以判据换成三条，每条都能单独证伪：
-//  1. 未登记的文件（`app.css` / `app.js`）仍必须逐字节一致 —— 它们没有理由分叉；
+//  1. 未登记的文件仍必须逐字节一致 —— 没有理由分叉的就别分叉；
 //  2. 已登记的文件必须**确实**存在差异 —— 否则白名单变陈旧（差异被同步回去了，
 //     登记项就该删掉），否则这份名单会长期挂着一条假豁免；
 //  3. 差异行数不得超过登记值 —— 扩大差异必须回来改这个数字，也就必然读到这段说明。
+//
+// ⚠️ 现状：三个文件**全部**已登记。不是判据废了，而是 Go 侧确实多了 Rust 侧没有的东西
+// （调度内核状态、策略 effective 列、event_log 告警页）。未登记即逐字节一致这条规则
+// 仍然对任何**新增**的静态文件生效。
 type rustOriginDiff struct {
 	// maxChangedLines 是允许的最大变更行数（新增行 + 删除行）。
 	maxChangedLines int
@@ -69,9 +73,20 @@ type rustOriginDiff struct {
 
 var rustOriginDiffs = map[string]rustOriginDiff{
 	"index.html": {
-		maxChangedLines: 8,
+		maxChangedLines: 55,
 		reason: "Go 侧已有调度内核、Rust 侧没有。启动横幅与「删节点文件」提示必须不同 —— " +
-			"写成一样，必然有一边在撒谎（Go 自贬为「不会真正下载」，或 Rust 假称「已启用」）。",
+			"写成一样，必然有一边在撒谎（Go 自贬为「不会真正下载」，或 Rust 假称「已启用」）。" +
+			"另加「告警」页（event_log 的读入口，Go 侧才有 event_log 查询接口）。",
+	},
+	"app.js": {
+		maxChangedLines: 71,
+		reason: "两处 Go 侧独有：① 设置页策略行的末列必须逐条显示 effective（Go 侧 12 条全接入内核，" +
+			"Rust 侧一条都没接），硬编码同一个字面量必然有一边在撒谎；" +
+			"② 告警页的 loadEvents/renderEvents —— Rust 侧没有 event_log 读接口，无从渲染。",
+	},
+	"app.css": {
+		maxChangedLines: 9,
+		reason:          "为「已生效」加了一个 .eff-on 颜色类，为告警级别加了 .lvl/.lvl-* 徽标；这两处在 Rust 侧都没有对应用途。",
 	},
 }
 

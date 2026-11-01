@@ -21,6 +21,9 @@ func TestFullInternalStateTableMapsDeterministically(t *testing.T) {
 		{"paused→paused", StatePaused, 0, errPtr(ErrNotStarted), AriaPaused},
 		{"completed→complete", StateCompleted, 1000, nil, AriaComplete},
 		{"failed→error", StateFailed, 0, errPtr(ErrNodeDown), AriaError},
+		{"failed_terminal→error", StateFailedTerminal, 0, errPtr(ErrOutOfRetry), AriaError},
+		{"orphaned→error", StateOrphaned, 400, nil, AriaError},
+		{"deduplicated→removed", StateDeduplicated, 0, nil, AriaRemoved},
 		{"removed→removed", StateRemoved, 0, nil, AriaRemoved},
 		{"未知状态→waiting", InternalState("unknown-thing"), 0, nil, AriaWaiting},
 	}

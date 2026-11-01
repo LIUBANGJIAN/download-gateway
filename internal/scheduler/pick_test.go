@@ -163,10 +163,16 @@ func TestPickAffinityHitReusesBoundNode(t *testing.T) {
 	}
 }
 
-// TestNoSilentRebind_WhenBoundNodeUnhealthy 是 B1 规格 §9 的 R-3 行（纯函数形态）。
+// TestNoSilentRebind_WhenBoundNodeUnhealthy 是 R-3 的纯函数形态判据。
 //
 // 判据：绑定节点不健康时，**绝不**产出 DecScored 去选别的节点。
 // 把 pickBound 改成 fallback 到评分 ⇒ 这条会红（Kind 变 DecScored、NodeID 变 2）。
+//
+// ⚠️ B2 落地后这条断言的**期望值变了但强度没变**：默认 `binding_policy=strong`，
+// 节点刚不可用时正确行为是「开始等宽限」（`DecAffinityWait` + `BindWait`），
+// 只有宽限到期才 `DecBindingInvalid`+`BindSplit`。所以断言改成
+// 「必须是 Wait/BindingInvalid 之一，且处置动作只能是 wait/split」——
+// 两边都排除了「静默改派」这一唯一禁止的形态。
 func TestNoSilentRebind_WhenBoundNodeUnhealthy(t *testing.T) {
 	unhealthy := healthy(1)
 	unhealthy.State = "offline"
@@ -183,8 +189,162 @@ func TestNoSilentRebind_WhenBoundNodeUnhealthy(t *testing.T) {
 	if d.NodeID == 2 {
 		t.Fatal("选中了非绑定节点 2 —— 违反「禁止静默改绑」")
 	}
+	if d.Kind != DecBindingInvalid && d.Kind != DecAffinityWait {
+		t.Fatalf("期望 DecBindingInvalid / DecAffinityWait，实得 %v", d.Kind)
+	}
+	if d.Binding.Action != BindWait && d.Binding.Action != BindSplit {
+		t.Fatalf("处置动作应为 wait/split，实得 %v", d.Binding.Action)
+	}
+	if d.Binding.Reason == "" {
+		t.Fatal("失效却没有 reason —— 用户无从知道为什么没下发")
+	}
+}
+
+// TestStrongWaitsThenSplits 守 B2 的 strong 分流：先等宽限、到期才拆组。
+//
+// 反证方式：把 ResolveBinding 的 `now >= WaitDeadline` 判成 `>` 或去掉 deadline 判断
+// ⇒ 第二种情形会一直 Wait，或第一种情形立刻 Split。
+func TestStrongWaitsThenSplits(t *testing.T) {
+	unhealthy := healthy(1)
+	unhealthy.Enabled = false
+	bn := int64(1)
+	now := int64(1_000_000)
+
+	// 首次失效：应开始等待，并把 deadline 交给调用方落库。
+	in := baseInput(unhealthy, healthy(2))
+	in.Group = &GroupRef{GroupID: 7, BoundNodeID: &bn, GroupState: "active", BindingPolicy: "strong"}
+	in.Now = now
+	d := Pick(in)
+	if d.Binding.Action != BindWait || d.Binding.Deadline != now+DefaultBindingGraceSec {
+		t.Fatalf("首次失效应为 Wait + deadline=%d，实得 %v/%d",
+			now+DefaultBindingGraceSec, d.Binding.Action, d.Binding.Deadline)
+	}
+	if !d.Binding.Alert {
+		t.Fatal("首次失效必须告警（Alert=true），否则用户永远不知道组卡住了")
+	}
+
+	// 宽限未到：继续等，不重复告警。
+	in.Group.WaitDeadline = now + 100
+	d = Pick(in)
+	if d.Binding.Action != BindWait || d.Binding.Alert {
+		t.Fatalf("宽限内应静默等待，实得 %v alert=%v", d.Binding.Action, d.Binding.Alert)
+	}
+
+	// 宽限到期：拆组。
+	in.Now = now + 200
+	d = Pick(in)
+	if d.Binding.Action != BindSplit {
+		t.Fatalf("宽限到期应拆组，实得 %v(%s)", d.Binding.Action, d.Binding.Reason)
+	}
 	if d.Kind != DecBindingInvalid {
-		t.Fatalf("期望 DecBindingInvalid（交给 B2 的接口），实得 %v", d.Kind)
+		t.Fatalf("拆组必须先返回 DecBindingInvalid 让调用方留痕，实得 %v", d.Kind)
+	}
+}
+
+// TestWeakSplitsImmediately 守 weak：一不可用就立即拆（不等宽限）。
+func TestWeakSplitsImmediately(t *testing.T) {
+	unhealthy := healthy(1)
+	unhealthy.State = "degraded"
+	bn := int64(1)
+	in := baseInput(unhealthy, healthy(2))
+	in.Group = &GroupRef{GroupID: 9, BoundNodeID: &bn, GroupState: "active", BindingPolicy: "weak"}
+	in.Now = 1_000_000
+
+	d := Pick(in)
+	if d.Binding.Action != BindSplit {
+		t.Fatalf("weak 应立即拆组，实得 %v(%s)", d.Binding.Action, d.Binding.Reason)
+	}
+	if d.Binding.Reason != "weak_immediate_split_node_offline" {
+		t.Fatalf("reason 应含失效原因，实得 %q", d.Binding.Reason)
+	}
+}
+
+// TestManualNeverRebinds 守 manual：永不自动改绑，只告警一次。
+func TestManualNeverRebinds(t *testing.T) {
+	unhealthy := healthy(1)
+	unhealthy.State = "offline"
+	bn := int64(1)
+	in := baseInput(unhealthy, healthy(2))
+	in.Group = &GroupRef{GroupID: 11, BoundNodeID: &bn, GroupState: "active", BindingPolicy: "manual"}
+	in.Now = 1_000_000
+
+	d := Pick(in)
+	if d.Binding.Action != BindWait {
+		t.Fatalf("manual 必须等待而不是改绑，实得 %v", d.Binding.Action)
+	}
+	if !d.Binding.Alert || d.Binding.Deadline == 0 {
+		t.Fatalf("首次失效要告警并记住（deadline>0），实得 alert=%v deadline=%d",
+			d.Binding.Alert, d.Binding.Deadline)
+	}
+
+	// 已经等得很久，仍然不拆。
+	in.Now = 1_000_000 + 10*DefaultBindingGraceSec
+	in.Group.WaitDeadline = 1_000_000 + DefaultBindingGraceSec
+	d = Pick(in)
+	if d.Binding.Action != BindWait || d.Binding.Alert {
+		t.Fatalf("manual 过期也只能等待且不重复告警，实得 %v alert=%v", d.Binding.Action, d.Binding.Alert)
+	}
+}
+
+// TestSplitGroupScattersThenRejoins 守 B2 的拆组与追平闭环。
+//
+// 三态断言：
+//  1. 组 health 且 active ⇒ 亲和命中绑定节点；
+//  2. 组已 split、绑定节点仍不健康 ⇒ 走评分（允许分散，已留痕过）；
+//  3. 组已 split、绑定节点恢复 ⇒ rejoin（回到原节点）。
+func TestSplitGroupScattersThenRejoins(t *testing.T) {
+	bn := int64(1)
+	now := int64(1_000_000)
+
+	// 情形 2：已拆且原节点不健康 ⇒ 评分到节点 2。
+	off := healthy(1)
+	off.State = "offline"
+	in := baseInput(off, healthy(2))
+	in.Now = now
+	in.Group = &GroupRef{
+		GroupID: 3, BoundNodeID: &bn, GroupState: GroupStateSplit, BindingPolicy: "weak",
+	}
+	d := Pick(in)
+	if d.Kind != DecScored {
+		t.Fatalf("已拆组应走评分，实得 %v(%s)", d.Kind, d.Reason)
+	}
+	if d.NodeID != 2 {
+		t.Fatalf("应落到健康节点 2，实得 %d", d.NodeID)
+	}
+
+	// 情形 3：已拆但原节点恢复 ⇒ rejoin。
+	in2 := baseInput(healthy(1), healthy(2))
+	in2.Now = now
+	in2.Group = &GroupRef{
+		GroupID: 3, BoundNodeID: &bn, GroupState: GroupStateSplit, BindingPolicy: "weak",
+	}
+	d2 := Pick(in2)
+	if d2.Binding.Action != BindRejoin {
+		t.Fatalf("原节点恢复应追平，实得 %v(%s)", d2.Binding.Action, d2.Binding.Reason)
+	}
+	if d2.Kind != DecAffinityHit || d2.NodeID != 1 {
+		t.Fatalf("追平后应按亲和命中节点 1，实得 %v node=%d", d2.Kind, d2.NodeID)
+	}
+}
+
+// TestGroupAffinityOffSplitsNotSilently 守「关掉组亲和 ≠ 静默改绑」。
+//
+// 判据：策略关闭时必须返回 BindSplit（调用方会写 group_binding_log），
+// 而不是直接 DecScored。把 ResolveBinding 里那条分支删掉 ⇒ 本测试红。
+func TestGroupAffinityOffSplitsNotSilently(t *testing.T) {
+	bn := int64(1)
+	in := baseInput(healthy(1), healthy(2))
+	in.Now = 1_000_000
+	in.Group = &GroupRef{GroupID: 5, BoundNodeID: &bn, GroupState: "active"}
+	in.Cfg = DefaultPolicy()
+	in.Cfg.DisableGroupAffinity = true
+
+	d := Pick(in)
+	if d.Binding.Action != BindSplit {
+		t.Fatalf("关闭组亲和应显式拆组，实得 %v", d.Binding.Action)
+	}
+	if d.Kind != DecBindingInvalid {
+		t.Fatalf("必须先返回 DecBindingInvalid 让调用方留痕，实得 %v", d.Kind)
 	}
 }
 

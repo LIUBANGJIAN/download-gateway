@@ -110,6 +110,7 @@ func LoadGroup(ctx context.Context, st *store.Store, groupID int64) (*scheduler.
 	rows, err := st.Query(ctx,
 		`SELECT g.group_id, g.bound_node_id, g.binding_epoch, g.group_state,
 		        g.max_concurrent_in_group, g.binding_policy, g.split_policy,
+		        COALESCE(g.wait_deadline, 0), g.bound_at, g.affinity_key,
 		        COALESCE((SELECT COUNT(1) FROM task t
 		                   WHERE t.group_id = g.group_id
 		                     AND t.internal_state IN ('running','dispatching')), 0)
@@ -128,7 +129,10 @@ func LoadGroup(ctx context.Context, st *store.Store, groupID int64) (*scheduler.
 		MaxConcurrentInGroup: asInt64(r[4]),
 		BindingPolicy:        asString(r[5]),
 		SplitPolicy:          asString(r[6]),
-		ActiveInGroup:        asInt64(r[7]),
+		WaitDeadline:         asInt64(r[7]),
+		BoundAt:              asInt64(r[8]),
+		AffinityKey:          asString(r[9]),
+		ActiveInGroup:        asInt64(r[10]),
 	}
 	if v, ok := r[1].(int64); ok {
 		g.BoundNodeID = &v
@@ -182,6 +186,8 @@ type QueuedTask struct {
 	MaxAttempts int64
 	NextRetryAt int64
 	EpisodeNo   *int64
+	// TotalSize 已解析的大小（0 = 未知；B3 的 L2c/L3 键需要它）。
+	TotalSize int64
 }
 
 // LoadQueuedTasks 扫待派发任务。
@@ -198,11 +204,13 @@ func LoadQueuedTasks(ctx context.Context, st *store.Store, now int64, limit int6
 	}
 	rows, err := st.Query(ctx, `
 		SELECT task_id, name, url_raw, kind, group_id, source_key,
-		       attempt_no, max_attempts, next_retry_at, episode_no
+		       attempt_no, max_attempts, next_retry_at, episode_no,
+		       COALESCE(total_size, 0)
 		  FROM task
 		 WHERE internal_state = 'queued'
 		   AND node_id IS NULL
 		   AND next_retry_at <= ?1
+		   AND possible_duplicate = 0
 		   AND (error_class IS NULL OR error_class <> 'not_started')
 		 ORDER BY created_at ASC
 		 LIMIT ?2`, now, limit)
@@ -231,6 +239,7 @@ func LoadQueuedTasks(ctx context.Context, st *store.Store, now int64, limit int6
 		if v, ok := r[9].(int64); ok {
 			t.EpisodeNo = &v
 		}
+		t.TotalSize = asInt64(r[10])
 		out = append(out, t)
 	}
 	return out, nil
@@ -399,6 +408,27 @@ func LogEvent(ctx context.Context, st *store.Store, level, category string, node
 	)
 }
 
+// LogEventDetail 同 [LogEvent]，额外写 `event_log.detail`（B3 的补名审计需要它）。
+func LogEventDetail(ctx context.Context, st *store.Store, level, category string, nodeID int64, taskID, message, detail string) {
+	var nodeArg any
+	if nodeID > 0 {
+		nodeArg = nodeID
+	}
+	var taskArg any
+	if taskID != "" {
+		taskArg = taskID
+	}
+	var detailArg any
+	if detail != "" {
+		detailArg = detail
+	}
+	_, _ = st.Execute(ctx,
+		`INSERT INTO event_log (level, category, node_id, task_id, message, detail, created_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s','now'))`,
+		level, category, nodeArg, taskArg, message, detailArg,
+	)
+}
+
 // LoadGroupByKey 按 `affinity_key` 读组（存在则返回视图与 group_id）。
 //
 // 为什么需要它：任务的 `group_id` 在**首次派发成功前**是 NULL，而它所属的组
@@ -411,6 +441,7 @@ func LoadGroupByKey(ctx context.Context, st *store.Store, affinityKey string) (*
 	rows, err := st.Query(ctx,
 		`SELECT g.group_id, g.bound_node_id, g.binding_epoch, g.group_state,
 		        g.max_concurrent_in_group, g.binding_policy, g.split_policy,
+		        COALESCE(g.wait_deadline, 0), g.bound_at, g.affinity_key,
 		        COALESCE((SELECT COUNT(1) FROM task t
 		                   WHERE t.group_id = g.group_id
 		                     AND t.internal_state IN ('running','dispatching')), 0)
@@ -429,7 +460,10 @@ func LoadGroupByKey(ctx context.Context, st *store.Store, affinityKey string) (*
 		MaxConcurrentInGroup: asInt64(r[4]),
 		BindingPolicy:        asString(r[5]),
 		SplitPolicy:          asString(r[6]),
-		ActiveInGroup:        asInt64(r[7]),
+		WaitDeadline:         asInt64(r[7]),
+		BoundAt:              asInt64(r[8]),
+		AffinityKey:          asString(r[9]),
+		ActiveInGroup:        asInt64(r[10]),
 	}
 	if v, ok := r[1].(int64); ok {
 		g.BoundNodeID = &v

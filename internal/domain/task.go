@@ -122,6 +122,17 @@ const (
 	// 为什么必须区分：`design/04 §10` 的 INV-A1 按 `failed_terminal` 排除终态；
 	// 若写 `failed`，失败任务会被误判成「本该在跑却没落节点」的违规。
 	StateFailedTerminal InternalState = "failed_terminal"
+	// StateOrphaned 孤儿：曾落在某节点上，但该节点离线 / 任务在节点上已消失。
+	//
+	// 由 B2 的失效路径写入（`design/02 §2.1.2` 的"在途失败任务 requeue 而非迁移"）。
+	// 它**不是终态**：节点恢复或 `auto_requeue_on_node_down` 生效后会回 `queued`，
+	// `attempt_no` 递增并新开一条 `task_attempt`。
+	StateOrphaned InternalState = "orphaned"
+	// StateDeduplicated 去重命中被跳过（B3）。终态，不再被调度循环扫到。
+	//
+	// 写入前提只有一个：L1/L2a/L2c 精确或高置信命中且既有任务仍存活。
+	// 中置信（L2b/L3）**不写**这个状态 —— 它走 `possible_duplicate=1` 标记后照常投递。
+	StateDeduplicated InternalState = "deduplicated"
 )
 
 // allInternalStates 的权威源是 `design/02 §3.4` 的 `task.internal_state` 值集表
@@ -130,10 +141,9 @@ const (
 // ⚠️ 历史注释曾写「必须与 Rust 侧一一对应」——**那是错的**：Rust 根本没有这个枚举
 // （裸 TEXT），把实现当权威会让扩值域时随手造值而全绿。
 //
-// 当前 9 值 = 冻结表 ∩ Go 的 7 值（queued/dispatching/running/paused/completed/
-// failed_terminal/removed）+ 2 个 Rust 遗留值（`failed`/`stopped`）。
-// 冻结表另有 4 个尚未落地的值：`orphaned`/`deduplicated`/`missing_on_node`/`external`
-// （白名单，见 frozen_states_test.go）。
+// 当前 11 值 = 冻结表 ∩ Go（9 值：queued/dispatching/running/paused/completed/
+// failed_terminal/orphaned/deduplicated/removed）+ 2 个 Rust 遗留值（`failed`/`stopped`）。
+// 冻结表另有 2 个尚未落地的值：`missing_on_node`/`external`（白名单，见 frozen_states_test.go）。
 //
 // ⚠️ `stopped` 不在 v2 冻结表里：它被拆成了 `paused` 与 `failed_terminal` 两支
 // （判据是 `errorCode`，见 `ClassifyNodeStatus`）。保留它只为读得懂存量数据，
@@ -141,6 +151,7 @@ const (
 var allInternalStates = []InternalState{
 	StateQueued, StateDispatching, StateRunning, StatePaused,
 	StateCompleted, StateFailed, StateFailedTerminal, StateRemoved, StateStopped,
+	StateOrphaned, StateDeduplicated,
 }
 
 // AllInternalStates 返回全部内部状态（副本）。

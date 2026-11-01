@@ -96,6 +96,21 @@ var rank = map[string]int{
 	// 若日后它需要 `config`/`secret` 之外的层，请连同此表一起改并说明理由。
 	"internal/tasks": 1,
 
+	// 层 1：去重键计算与落账（`dedup`）。
+	//
+	// 登记理由（实测依赖集）：`key.go` 是纯函数（标准库 + 哈希），
+	// `store.go` 依赖 `internal/store`（层 0）读写 `dedup_index`。
+	// 取 1 是"最紧且成立"：`rank(store)=0 < rank(dedup)=1`。
+	// 它不认识 `engine`/`dispatch`/`grouping` —— 判重算法一旦能读业务决策，
+	// 就再也无法用一张表钉住"哪个输入算重复"。
+	"internal/dedup": 1,
+
+	// 层 0：补名器（`naming`）。
+	//
+	// 登记理由：**纯字符串变换**，实测依赖只有标准库。它刻意不认识 store/domain ——
+	// 补名规则（可逆、不带路径分隔符）必须能脱离库与网络被逐条证伪。
+	"internal/naming": 0,
+
 	// 层 2：T04 破环用的两个叶子包。
 	"internal/handshake": 2,
 	"internal/session":   2,

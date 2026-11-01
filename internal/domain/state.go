@@ -33,9 +33,9 @@ func DeriveAriaStatus(internalState InternalState, permillage int64, errorClass 
 		return AriaPaused
 	case StateCompleted:
 		return AriaComplete
-	case StateFailed, StateFailedTerminal:
+	case StateFailed, StateFailedTerminal, StateOrphaned:
 		return AriaError
-	case StateRemoved:
+	case StateRemoved, StateDeduplicated:
 		return AriaRemoved
 	case StateStopped:
 		if permillage >= 1000 {
@@ -230,6 +230,11 @@ func DispatchView(nodeID *int64, state InternalState) (dispatched bool, dispatch
 		return dispatched, "completed"
 	case StateFailed, StateFailedTerminal:
 		return dispatched, "failed"
+		// 孤儿保留 `node_id`（"最后一次落点"仍是事实），但对外必须能看出它不是失败终态。
+	case StateOrphaned:
+		return dispatched, "orphaned"
+	case StateDeduplicated:
+		return dispatched, "deduplicated"
 	case StateRemoved:
 		return dispatched, "removed"
 	case StateStopped:
