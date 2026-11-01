@@ -28,6 +28,15 @@ const testToken = "ci-smoke-public-token-2f7a"
 // newPublicServer 建真实库 + 真实 handler。
 func newPublicServer(t *testing.T, token *string) *httptest.Server {
 	t.Helper()
+	return newPublicServerWith(t, nil, token)
+}
+
+// newPublicServerWith 在 newPublicServer 之上多给一个「对外口用户名」。
+//
+// 用户名是有意做成可选的两个状态（nil = 不校验），所以这里必须能分别造出
+// 「配了」和「没配」两种服务端，否则两条分支里总有一条测不到。
+func newPublicServerWith(t *testing.T, user, token *string) *httptest.Server {
+	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "dispatch.db")
 	st, err := store.Open(dbPath, filepath.Join("..", "..", "migrations"))
 	if err != nil {
@@ -35,7 +44,7 @@ func newPublicServer(t *testing.T, token *string) *httptest.Server {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	ps := state.NewPublicState(st, ids.NowSecs(), token, false, state.HandshakeState{
+	ps := state.NewPublicState(st, ids.NowSecs(), user, token, false, state.HandshakeState{
 		Tokens: handshake.NewStore(),
 	})
 	srv := httptest.NewServer(NewRouter(ps, "0.1.3"))

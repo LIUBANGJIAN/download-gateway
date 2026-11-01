@@ -10,6 +10,7 @@
 package ingress
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"strings"
@@ -43,41 +44,54 @@ const (
 	AuthzDeny
 )
 
-// AuthPolicy encapsulates the two inbound-auth sources: a proxy-issued
-// device_token (highest priority) plus an optional public token.
+// AuthPolicy 封装对外口的入站凭据：可选用户名 + 口令。
 //
-// A nil PublicToken means "not configured" (no check).
+// PublicPassword == nil 表示「未配置」⇒ 不校验（与旧版单 token 语义一致）。
+// PublicUser == nil 表示「只验口令、不验用户名」——老部署只配过一个 token，
+// 没有用户名这个概念，强行要求会把它们全部挡在门外。
 type AuthPolicy struct {
-	// PublicToken is DISPATCH_PUBLIC_TOKEN; nil means no check.
-	PublicToken *string
+	// PublicUser is DISPATCH_PUBLIC_USER; nil means "don't check username".
+	PublicUser *string
+	// PublicPassword is DISPATCH_PUBLIC_PASSWORD; nil means no check at all.
+	PublicPassword *string
 }
 
-// NewAuthPolicy builds an AuthPolicy from an optional public token.
-func NewAuthPolicy(publicToken *string) AuthPolicy {
-	return AuthPolicy{PublicToken: publicToken}
+// NewAuthPolicy builds an AuthPolicy from the configured credentials.
+func NewAuthPolicy(publicUser, publicPassword *string) AuthPolicy {
+	return AuthPolicy{PublicUser: publicUser, PublicPassword: publicPassword}
 }
 
-// Decide implements the decision table (design-2 §(4)) row by row:
+// Decide implements the decision table row by row.
 //
-//	| Bearer | is proxy device_token | public token configured | equal | result |
-//	|:------:|:---------------------:|:-----------------------:|:-----:|:------:|
-//	|  yes   |          yes          |          any            |   —   | Allow  |
-//	|  yes   |          no           |          yes            |  yes  | Allow  |
-//	|  yes   |          no           |          yes            | no/空 | Deny   |
-//	|  no    |          —            |          yes            |   —   | Deny   |
-//	|  yes   |          no           |          no             |   —   | Allow  |
-//	|  no    |          —            |          no             |   —   | Allow  |
-func (p AuthPolicy) Decide(bearer *string, deviceTokenValid bool) Authz {
+// 相对 Rust 原件（只有 `Bearer` 一种携带方式）**刻意扩展**了两行：Basic 与用户名。
+// 原因是部署侧需要一个「账号 + 密码」的概念（真 BitComet 客户端的登录框本来就有
+// 用户名/密码两个输入框），而只有 token 时用户名无处安放。扩展后三种携带方式
+// **共用同一个口令值**，所以老部署把 `DISPATCH_PUBLIC_TOKEN` 原样改名即可：
+//
+//	| 携带方式                        | 校验什么                        |
+//	|:--------------------------------|:--------------------------------|
+//	| `Authorization: Bearer <口令>`   | 只比口令（向后兼容，用户名不参与） |
+//	| `Authorization: Basic <u:p>`     | 配了用户名则两边都比，否则只比口令  |
+//	| Aria2 `params[0] = "token:<口令>"` | 只比口令（见 TokenParamOf）      |
+func (p AuthPolicy) Decide(headers http.Header, deviceTokenValid bool) Authz {
 	// Row 1: a token issued by this process has the highest priority.
 	if deviceTokenValid {
 		return AuthzAllow
 	}
-	if p.PublicToken == nil {
-		// Rows 5 and 6.
+	if p.PublicPassword == nil {
+		// 未配置 ⇒ 不校验（内网可用性取舍，与旧版一致）。
 		return AuthzAllow
 	}
-	// Rows 2, 3 and 4.
-	if bearer != nil && CtEq(*bearer, *p.PublicToken) {
+	if bearer := BearerOf(headers); bearer != nil && CtEq(*bearer, *p.PublicPassword) {
+		return AuthzAllow
+	}
+	if user, pass, ok := BasicOf(headers); ok {
+		if !CtEq(pass, *p.PublicPassword) {
+			return AuthzDeny
+		}
+		if p.PublicUser != nil && !CtEq(user, *p.PublicUser) {
+			return AuthzDeny
+		}
 		return AuthzAllow
 	}
 	return AuthzDeny
@@ -85,15 +99,11 @@ func (p AuthPolicy) Decide(bearer *string, deviceTokenValid bool) Authz {
 
 // PublicAuthState is the slice of public state that inbound authorisation
 // needs. It is an interface so that envelope.go does not depend on the
-// (not-yet-written) internal/state package; *state.PublicState is expected to
-// satisfy it.
-//
-// NOTE (待接线点): if internal/state settles on different method names, adapt
-// here — the decision table itself is unchanged.
+// internal/state package; *state.PublicState is expected to satisfy it.
 type PublicAuthState interface {
-	// PublicTokenConfigured returns the configured public token and whether one
-	// is configured at all.
-	PublicTokenConfigured() (token string, configured bool)
+	// PublicAuth returns the configured credentials and whether a password is
+	// configured at all (username may be empty = "don't check username").
+	PublicAuth() (user, password string, configured bool)
 	// IsDeviceToken reports whether token was issued by this proxy process.
 	IsDeviceToken(token string) bool
 }
@@ -106,11 +116,15 @@ func Authorize(st PublicAuthState, headers http.Header) Authz {
 	if bearer != nil {
 		deviceOK = st.IsDeviceToken(*bearer)
 	}
-	var publicToken *string
-	if tok, configured := st.PublicTokenConfigured(); configured {
-		publicToken = &tok
+	user, pass, configured := st.PublicAuth()
+	var p AuthPolicy
+	if configured {
+		if user != "" {
+			p.PublicUser = &user
+		}
+		p.PublicPassword = &pass
 	}
-	return NewAuthPolicy(publicToken).Decide(bearer, deviceOK)
+	return p.Decide(headers, deviceOK)
 }
 
 // headerValue performs a case-insensitive header lookup, mirroring axum's
@@ -139,6 +153,29 @@ func BearerOf(headers http.Header) *string {
 		return &v
 	}
 	return nil
+}
+
+// BasicOf extracts username/password from an `Authorization: Basic <b64>` header
+// (case-insensitive prefix, RFC 7617 `<user>:<pass>` payload).
+//
+// Returns ok=false when the header is absent, not Basic, not valid base64, or
+// the decoded payload has no `:` separator. 用户名里含 `:` 的情况按 RFC 7617
+// 的宽松实现处理：**第一个** `:` 之前是用户名（BitComet 的用户名不会含冒号）。
+func BasicOf(headers http.Header) (user, pass string, ok bool) {
+	raw := strings.TrimSpace(headerValue(headers, "Authorization"))
+	const prefix = "basic "
+	if len(raw) <= len(prefix) || !strings.EqualFold(raw[:len(prefix)], prefix) {
+		return "", "", false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw[len(prefix):]))
+	if err != nil {
+		return "", "", false
+	}
+	u, p, found := strings.Cut(string(decoded), ":")
+	if !found {
+		return "", "", false
+	}
+	return u, p, true
 }
 
 // TokenErr values (mirror of the Rust TokenErr enum; messages are contract).

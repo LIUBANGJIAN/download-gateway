@@ -156,7 +156,8 @@ func (s *adminServer) summary(w http.ResponseWriter, r *http.Request) {
 		"task_total":         total,
 		"nodes":              nodes,
 		"env_flags": map[string]any{
-			"public_token_configured":   env.PublicTokenConfigured,
+			"public_user":              env.PublicUser,
+			"public_password_configured": env.PublicPasswordConfigured,
 			"admin_password_configured": env.AdminPasswordConfigured,
 			"allow_file_delete":         env.AllowFileDelete,
 			"public_cors":               env.PublicCORS,

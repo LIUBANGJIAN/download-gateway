@@ -182,7 +182,7 @@ func (s *server) dispatchCall(r *http.Request, call any) any {
 
 // handleMethod 分派并执行单个 aria2 方法（含 `token:` 校验）。
 func (s *server) handleMethod(r *http.Request, method string, params []any) (any, *rpcErr) {
-	if err := TokenParamOf(&params, s.st.PublicToken); err != nil {
+	if err := TokenParamOf(&params, s.st.PublicPassword); err != nil {
 		return nil, newRPCErr(Aria2Unauthorized, "Unauthorized")
 	}
 	ctx := r.Context()

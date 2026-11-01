@@ -34,7 +34,6 @@ import (
 	"time"
 
 	"github.com/LIUBANGJIAN/download-gateway/internal/admin"
-	"github.com/LIUBANGJIAN/download-gateway/internal/adminpass"
 	"github.com/LIUBANGJIAN/download-gateway/internal/config"
 	"github.com/LIUBANGJIAN/download-gateway/internal/engine"
 	"github.com/LIUBANGJIAN/download-gateway/internal/handshake"
@@ -62,19 +61,13 @@ const EnvRustLog = "RUST_LOG"
 const shutdownTimeout = 10 * time.Second
 
 func main() {
-	// 子命令优先于「启动服务」：`reset-password` 是忘记口令时的人工补救路径，
-	// 它只碰数据库、不绑端口，所以必须在 run() 读配置、起监听之前分流。
-	//
 	// 未知子命令直接报错而不是忽略：`download-gateway restar` 这种手误会静默启动一个
 	// 抢端口的服务，排查起来比一句报错贵得多。
+	//
+	// `reset-password` 已随「口令不落库」一起删除 —— 忘记口令就是改 compose 重启，
+	// 不再需要（也不该有）一条能绕过部署配置写库的旁路。
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case ResetPasswordCmd:
-			if err := runResetPassword(os.Args[2:]); err != nil {
-				fmt.Fprintf(os.Stderr, "download-gateway %s: %v\n", ResetPasswordCmd, err)
-				os.Exit(1)
-			}
-			return
 		case "-h", "--help", "help":
 			fmt.Fprint(os.Stdout, mainUsage)
 			return
@@ -92,8 +85,10 @@ func main() {
 // mainUsage 是无参数子命令时的总用法（`download-gateway help` / `--help`）。
 const mainUsage = `用法：
   download-gateway                    启动服务（读环境变量，监听对外口与管理口）
-  download-gateway reset-password     重置管理口令（忘记口令时的补救路径，详见 -h）
   download-gateway help               显示本说明
+
+管理账号密码由环境变量 DISPATCH_ADMIN_USER / DISPATCH_ADMIN_PASSWORD 决定，
+不在界面修改、也不落库；忘记口令时改 docker-compose.yml 后重启即可。
 `
 
 // run 是真正的启动流程（便于测试与 `main` 分离）。
@@ -119,19 +114,38 @@ func run() error {
 		slog.Info("调度内核已启用：排队任务会按亲和/评分选点并投递到 BitComet 节点；" +
 			"可用 DISPATCH_SCHEDULER=off 或 app_config.scheduler.enabled='off' 关闭")
 	}
-	if cfg.PublicToken == nil {
-		slog.Warn("对外口未配置 DISPATCH_PUBLIC_TOKEN：6800 无鉴权，任何可达者都能投递任务",
+	if cfg.PublicPassword == nil {
+		slog.Warn("对外口未配置 DISPATCH_PUBLIC_PASSWORD：6800 无鉴权，任何可达者都能投递任务",
 			"addr", cfg.PublicAddr)
+	} else {
+		// 用户名是可选项，得说清「现在到底验不验它」—— 否则用户配了个用户名，
+		// 却以为它在起作用（而实际只验了口令）。
+		if cfg.PublicUser == "" {
+			slog.Warn("对外口已配置口令但未设 DISPATCH_PUBLIC_USER：只校验口令，用户名不参与校验",
+				"addr", cfg.PublicAddr)
+		} else {
+			slog.Info("对外口鉴权已启用",
+				"addr", cfg.PublicAddr, "user", cfg.PublicUser,
+				"schemes", "Bearer 口令 / Basic 用户名:口令 / Aria2 token:口令")
+		}
+		if cfg.PublicPasswordFromToken {
+			slog.Warn("对外口令取自旧名 DISPATCH_PUBLIC_TOKEN（仍生效）：建议改名为 DISPATCH_PUBLIC_PASSWORD，" +
+				"两者都设时只认新名")
+		}
 	}
-	if cfg.PublicCORS && cfg.PublicToken == nil {
-		slog.Warn("已开启 CORS 但 DISPATCH_PUBLIC_TOKEN 未配置：任意网页可向内网投任务（drive-by）")
+	if cfg.PublicCORS && cfg.PublicPassword == nil {
+		slog.Warn("已开启 CORS 但 DISPATCH_PUBLIC_PASSWORD 未配置：任意网页可向内网投任务（drive-by）")
 	}
 
 	// ── 管理口令 ─────────────────────────────────────────────────────────
+	// **唯一来源**：`DISPATCH_ADMIN_PASSWORD`（未设则启动随机生成，只在日志里）。
+	// 不落库、界面不可改 —— 库里那两个键（admin.password_hash / _updated_at）
+	// 由 V2 迁移清掉，所以升级后老部署的「界面改过的口令」会退回 compose 里的值。
 	adminPolicy := config.ResolveAdminPolicy(cfg)
 	if adminPolicy.Generated {
-		slog.Warn("DISPATCH_ADMIN_PASSWORD 未设置：已生成随机管理口令（仅本次启动有效，重启会变）",
-			"password", adminPolicy.Password)
+		slog.Warn("DISPATCH_ADMIN_PASSWORD 未设置：已生成随机管理口令（仅本次启动有效，重启会变）。"+
+			"请把它写进 docker-compose.yml 的 environment，否则容器一重启口令就换",
+			"username", adminPolicy.User, "password", adminPolicy.Password)
 	}
 	if !isLoopback(cfg.AdminAddr) && adminPolicy.CookieSecure != config.CookieSecureAlways {
 		slog.Warn("会话 Cookie 未强制 Secure，明文传输；请置于 TLS/反代之后，或勿将管理口暴露到不可信网络",
@@ -169,7 +183,7 @@ func run() error {
 		ProxyClientID: "",                   // T04: bitcomet clientid 文件机制
 		Tokens:        handshake.NewStore(), // 叶子包 internal/handshake
 	}
-	publicState := state.NewPublicState(st, now, cfg.PublicToken, cfg.PublicCORS, hs)
+	publicState := state.NewPublicState(st, now, publicUserPtr(cfg.PublicUser), cfg.PublicPassword, cfg.PublicCORS, hs)
 
 	env := config.EnvSnapshot{
 		PublicAddr:              cfg.PublicAddr,
@@ -181,27 +195,21 @@ func run() error {
 		WebDir:                  cfg.WebDir,
 		AdminUser:               cfg.AdminUser,
 		AdminPasswordConfigured: !adminPolicy.Generated,
-		PublicTokenConfigured:   cfg.PublicToken != nil,
+		PublicUser:              cfg.PublicUser,
+		PublicPasswordConfigured: cfg.PublicPassword != nil,
+		PublicPasswordFromToken:  cfg.PublicPasswordFromToken,
 		AllowFileDelete:         cfg.AllowFileDelete,
 		PublicCORS:              cfg.PublicCORS,
 		AdminCookieSecure:       adminPolicy.CookieSecure,
 	}
 	adminState := state.NewAdminState(st, now, &adminPolicy, env, secrets, cfg.WebDir)
 
-	// 管理口令的**实际来源**：库里用户自设的 argon2id 哈希 > 环境变量 > 启动时随机生成。
-	// 只在这里读一次；之后「在管理台改口令」走 `Credential.SetHash` 热替换，无需重启。
-	//
-	// 顺序不能反：若先信任环境变量，用户改过的口令会被部署参数悄悄覆盖回去 ——
-	// 症状是「改成功了，重启后又变回旧口令」，而日志里一个字都不会提。
-	if phc, found := adminpass.LoadHash(context.Background(), st); found {
-		slog.Info("检测到已在管理台设置的口令，环境变量中的初始口令不再参与校验")
-		adminState.Credential.SetHash(phc)
-	}
-	// 一句兜底提示：口令一旦改过就无法从库反推。两条补救路径都写在这里，
-	// 因为「忘记口令的人根本进不了界面」—— 提示只能出现在日志和文档里。
-	slog.Info("忘记管理口令时：登录页「忘记口令？」可生成一次性临时口令（只写在本日志里，" +
-		"用 `docker logs <容器名> | grep temp_password` 取）；" +
-		"日志拿不到或在裸机上，用 `download-gateway reset-password`（改完需重启）")
+	// 口令来源只有一处，这里不再需要「库里哈希覆盖环境变量」的分支 ——
+	// 那正是「我明明配了 X 却登不上」的成因（见 internal/adminpass 包注释）。
+	slog.Info("管理台凭据来自部署配置：用户名与口令都由环境变量决定，界面不可修改、不落库。"+
+		"忘记口令时改 docker-compose.yml 的 DISPATCH_ADMIN_PASSWORD 后重启容器即可",
+		"username", adminState.Credential.User(),
+		"password_from_env", !adminPolicy.Generated)
 
 	// ── 路由装配 ─────────────────────────────────────────────────────────
 	// 对外口：aria2 JSON-RPC / BitComet 8 条复刻路径 / 三段式握手第一段 / `/healthz`。
@@ -339,4 +347,16 @@ func isLoopback(addr string) bool {
 	}
 	host = strings.Trim(host, "[]")
 	return host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
+// publicUserPtr 把「没配用户名」折成 nil。
+//
+// 不能把空串直接塞给 state：`*string` 非 nil 的语义是「必须校验用户名」，
+// 一个 `""` 会让所有 Basic 认证请求都因为「用户名不匹配」被拒。
+func publicUserPtr(user string) *string {
+	u := strings.TrimSpace(user)
+	if u == "" {
+		return nil
+	}
+	return &u
 }

@@ -355,9 +355,9 @@ CREATE TABLE t (id INTEGER PRIMARY KEY);`)
 
 // 对照 Rust: store/migrate.rs::real_v1_migration_produces_14_tables_and_17_indexes
 //
-// **最硬的验收**：拿**真实的** migrations/V1__init.sql 在**磁盘库**上跑一遍，
+// **最硬的验收**：拿**真实的** migrations/ 目录在**磁盘库**上跑一遍，
 // 断言 DDL 的**实际效果**（14 表 / 17 显式索引 / 外键自检为空 / 关键表与部分唯一索引都在）。
-func TestRealV1MigrationProduces14TablesAnd17Indexes(t *testing.T) {
+func TestRealMigrationsProduce14TablesAnd17Indexes(t *testing.T) {
 	migDir := filepath.Join("..", "..", "migrations")
 	if _, err := os.Stat(filepath.Join(migDir, "V1__init.sql")); err != nil {
 		t.Fatalf("找不到真实迁移文件 %s: %v", filepath.Join(migDir, "V1__init.sql"), err)
@@ -369,15 +369,15 @@ func TestRealV1MigrationProduces14TablesAnd17Indexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply 真实 V1: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("应恰好应用 V1（1 个），得到 %d", n)
+	if n != 2 {
+		t.Fatalf("应恰好应用 V1+V2（2 个），得到 %d", n)
 	}
 	vers, err := AppliedVersions(conn)
 	if err != nil {
 		t.Fatalf("AppliedVersions: %v", err)
 	}
-	if !equalInt64s(vers, []int64{1}) {
-		t.Fatalf("applied_versions 应为 [1]，得到 %v", vers)
+	if !equalInt64s(vers, []int64{1, 2}) {
+		t.Fatalf("applied_versions 应为 [1 2]，得到 %v", vers)
 	}
 
 	tables := connInt(t, conn,
@@ -416,5 +416,55 @@ func TestRealV1MigrationProduces14TablesAnd17Indexes(t *testing.T) {
 	if c := connInt(t, conn,
 		"SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ux_task_group_episode'"); c != 1 {
 		t.Fatalf("缺 INV-A5 的部分唯一索引 ux_task_group_episode")
+	}
+}
+
+// V2 的唯一职责：把老库里残留的两行凭据配置删掉，业务配置必须原样保留。
+//
+// 只断言「迁移数量 = 2」是不够的 —— 那只能证明文件跑过了，证明不了它删的是对的东西、
+// 也没多删。这条测试模拟真实升级路径：先用只有 V1 的目录造出老库，写入凭据行与
+// 业务策略行，再补上 V2 升级。
+func TestV2ClearsAdminCredentialsOnly(t *testing.T) {
+	migDir := filepath.Join("..", "..", "migrations")
+	dir := t.TempDir()
+
+	v1, err := os.ReadFile(filepath.Join(migDir, "V1__init.sql"))
+	if err != nil {
+		t.Fatalf("读 V1: %v", err)
+	}
+	writeMigration(t, dir, "V1__init.sql", string(v1))
+
+	_, conn := newDiskConn(t)
+	if _, err := Apply(conn, dir); err != nil {
+		t.Fatalf("应用 V1: %v", err)
+	}
+
+	// 模拟老版本「在管理台改过口令」留下的两行，外加一行业务策略作为对照。
+	stmt := `INSERT INTO app_config(key, value, updated_at) VALUES
+		('admin.password_hash', '$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA', 1),
+		('admin.password_updated_at', '1700000000', 1),
+		('policy.node_weight', '{"enabled":false,"priority":60}', 1)`
+	if _, err := conn.ExecContext(context.Background(), stmt); err != nil {
+		t.Fatalf("写入升级前数据: %v", err)
+	}
+
+	v2, err := os.ReadFile(filepath.Join(migDir, "V2__drop_admin_password.sql"))
+	if err != nil {
+		t.Fatalf("读 V2: %v", err)
+	}
+	writeMigration(t, dir, "V2__drop_admin_password.sql", string(v2))
+	n, err := Apply(conn, dir)
+	if err != nil {
+		t.Fatalf("升级应用 V2: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("升级时只应应用 V2（1 个），得到 %d", n)
+	}
+
+	if c := connInt(t, conn, "SELECT COUNT(*) FROM app_config WHERE key LIKE 'admin.%'"); c != 0 {
+		t.Fatalf("V2 之后不得残留任何凭据配置，实际 %d 行", c)
+	}
+	if c := connInt(t, conn, "SELECT COUNT(*) FROM app_config WHERE key = 'policy.node_weight'"); c != 1 {
+		t.Fatal("V2 误删了业务策略行")
 	}
 }

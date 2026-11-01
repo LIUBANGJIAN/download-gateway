@@ -101,7 +101,7 @@ func TestCookieSecureStringRoundTrips(t *testing.T) {
 // 对照 `admin_policy_generates_when_absent`。
 func TestAdminPolicyGeneratesWhenAbsent(t *testing.T) {
 	cfg := Config{PublicAddr: "x", AdminAddr: "x", DBPath: "x", MigrationsDir: "x",
-		LogLevel: "info", PublicToken: nil, AdminPassword: nil,
+		LogLevel: "info", PublicPassword: nil, AdminPassword: nil,
 		AdminCookieSecure: CookieSecureAuto, WebDir: nil, AllowFileDelete: false, PublicCORS: false}
 	p := ResolveAdminPolicy(cfg)
 	if !p.Generated {
@@ -116,7 +116,7 @@ func TestAdminPolicyGeneratesWhenAbsent(t *testing.T) {
 func TestAdminPolicyUsesInjectedPassword(t *testing.T) {
 	pw := "test123"
 	cfg := Config{PublicAddr: "x", AdminAddr: "x", DBPath: "x", MigrationsDir: "x",
-		LogLevel: "info", PublicToken: nil, AdminPassword: &pw,
+		LogLevel: "info", PublicPassword: nil, AdminPassword: &pw,
 		AdminCookieSecure: CookieSecureAuto, WebDir: nil, AllowFileDelete: false, PublicCORS: false}
 	p := ResolveAdminPolicy(cfg)
 	if p.Generated {
@@ -197,7 +197,8 @@ func snap() EnvSnapshot {
 		WebDir:                  nil,
 		AdminUser:               "admin",
 		AdminPasswordConfigured: true,
-		PublicTokenConfigured:   true,
+		PublicUser:              "ops",
+		PublicPasswordConfigured: true,
 		AllowFileDelete:         false,
 		PublicCORS:              false,
 		AdminCookieSecure:       CookieSecureAuto,
@@ -224,16 +225,20 @@ func TestItemsSensitiveAreMasked(t *testing.T) {
 	}
 }
 
-// ★ 关键契约：`DISPATCH_ADMIN_PASSWORD` / `DISPATCH_PUBLIC_TOKEN` 的**键名本身命中敏感判定**，
+// ★ 关键契约：`DISPATCH_ADMIN_PASSWORD` / `DISPATCH_PUBLIC_PASSWORD` 的**键名本身命中敏感判定**，
 // 故即便其展示字面量是「已配置」，最终也**必然**被掩码成 `****`（Rust 既有行为，本移植不"修正"）。
 // 这条能杀掉「先掩码再算值」或「漏掉这两个键」的变异。
-func TestItemsMasksAdminPasswordAndPublicTokenEvenWhenConfigured(t *testing.T) {
+func TestItemsMasksAdminPasswordAndPublicPasswordEvenWhenConfigured(t *testing.T) {
 	byKey := indexItems(snap().Items())
 	if got := byKey[EnvAdminPassword].Value; got != "****" {
 		t.Fatalf("DISPATCH_ADMIN_PASSWORD 必须掩码为 ****，实际 %q", got)
 	}
-	if got := byKey[EnvPublicToken].Value; got != "****" {
-		t.Fatalf("DISPATCH_PUBLIC_TOKEN 必须掩码为 ****，实际 %q", got)
+	if got := byKey[EnvPublicPassword].Value; got != "****" {
+		t.Fatalf("DISPATCH_PUBLIC_PASSWORD 必须掩码为 ****，实际 %q", got)
+	}
+	// 用户名不是秘密，必须**明文**显示 —— 它是「配错了变量名」的唯一可见线索。
+	if got := byKey[EnvPublicUser].Value; got != "ops" {
+		t.Fatalf("对外口用户名应明文显示 ops，实际 %q", got)
 	}
 }
 
@@ -244,6 +249,8 @@ func TestItemsContentAndOrder(t *testing.T) {
 		key, value string
 	}{
 		{EnvPublicAddr, "0.0.0.0:6800"},
+		{EnvPublicUser, "ops"},
+		{EnvPublicPassword, "****"},
 		{EnvAdminAddr, "127.0.0.1:8080"},
 		{EnvDB, "data/x.db"},
 		{EnvMigrations, "migrations"},
@@ -252,7 +259,6 @@ func TestItemsContentAndOrder(t *testing.T) {
 		{EnvWebDir, "(内嵌)"}, // WebDir=nil ⇒ 内嵌
 		{EnvAdminUser, "admin"},
 		{EnvAdminPassword, "****"},
-		{EnvPublicToken, "****"},
 		{EnvAllowFileDelete, "false"},
 		{EnvPublicCORS, "false"},
 		{EnvAdminCookieSecure, "auto"},

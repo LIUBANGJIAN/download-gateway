@@ -80,10 +80,18 @@ func verifyLoginCredentials(st *state.PublicState, clientID, authentication stri
 	}
 	username, _ := payload["username"].(string)
 
-	// ★承重墙：token 已配置时，密文里的 password 必须等于它，
-	// 否则 device_token 签发链路会把「配置了 token」的安全承诺整体绕过。
-	if st.PublicToken != nil && !CtEq(pw, *st.PublicToken) {
-		return "", loginFailCredentialMismatch
+	// ★承重墙：口令已配置时，密文里的 password 必须等于它，
+	// 否则 device_token 签发链路会把「配置了凭据」的安全承诺整体绕过。
+	if st.PublicPassword != nil {
+		if !CtEq(pw, *st.PublicPassword) {
+			return "", loginFailCredentialMismatch
+		}
+		// 用户名同理：配了就必须对得上。真 BitComet 客户端的登录框本来就有
+		// 用户名/密码两个输入框，只验口令等于把用户名当装饰 —— 用户会在
+		// compose 里填一个账号，然后发现"随便填都能登进来"。
+		if st.PublicUser != nil && !CtEq(strings.TrimSpace(username), *st.PublicUser) {
+			return "", loginFailCredentialMismatch
+		}
 	}
 	return username, ""
 }
@@ -129,7 +137,7 @@ func (s *server) webuiLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prefix := clientIDPrefix(req.ClientID)
-	authRequired := s.st.PublicToken != nil
+	authRequired := s.st.PublicPassword != nil
 	username, fail := verifyLoginCredentials(s.st, req.ClientID, *req.Authentication)
 	if fail != "" {
 		slog.Warn("handshake_login_failed", "client_id_prefix", prefix, "reason", fail)

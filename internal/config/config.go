@@ -33,11 +33,24 @@ import (
 
 // 环境变量名（逐字对照 Rust 侧字面量）。
 const (
-	EnvPublicAddr    = "DISPATCH_PUBLIC_ADDR"
-	EnvAdminAddr     = "DISPATCH_ADMIN_ADDR"
-	EnvDB            = "DISPATCH_DB"
-	EnvMigrations    = "DISPATCH_MIGRATIONS"
-	EnvLog           = "DISPATCH_LOG"
+	EnvPublicAddr = "DISPATCH_PUBLIC_ADDR"
+	EnvAdminAddr  = "DISPATCH_ADMIN_ADDR"
+	EnvDB         = "DISPATCH_DB"
+	EnvMigrations = "DISPATCH_MIGRATIONS"
+	EnvLog        = "DISPATCH_LOG"
+	// EnvPublicUser 是对外口（:6800）的登录用户名。
+	//
+	// 空 = **不校验用户名**（只认口令），保持与旧版单令牌部署的兼容。
+	EnvPublicUser = "DISPATCH_PUBLIC_USER"
+	// EnvPublicPassword 是对外口的口令 / 令牌值。
+	//
+	// 这一个值同时用于三处：`Authorization: Bearer <值>`、`Authorization: Basic
+	// <base64(用户名:值)>`、Aria2 的 `params[0] = "token:<值>"`。
+	EnvPublicPassword = "DISPATCH_PUBLIC_PASSWORD"
+	// EnvPublicToken 是 [EnvPublicPassword] 的**旧名**，仍可用。
+	//
+	// 保留原因：老部署的 compose 里写的是它，静默失效会让升级变成一次线上故障
+	// （对外口突然不校验了）。两者都设时以 PASSWORD 为准，启动日志会提示该换名。
 	EnvPublicToken   = "DISPATCH_PUBLIC_TOKEN"
 	EnvAdminPassword = "DISPATCH_ADMIN_PASSWORD"
 	// EnvAdminUser 是管理台登录用户名（默认 admin）。
@@ -76,8 +89,13 @@ type Config struct {
 	MigrationsDir string
 	// LogLevel 日志级别。
 	LogLevel string
-	// PublicToken `DISPATCH_PUBLIC_TOKEN`；nil = 对外口不校验。
-	PublicToken *string
+	// PublicUser 对外口用户名；空 = 不校验用户名（只验口令）。
+	PublicUser string
+	// PublicPassword 对外口口令（即旧版 token）；nil = 对外口不校验。
+	PublicPassword *string
+	// PublicPasswordFromToken true = 口令取自旧名 `DISPATCH_PUBLIC_TOKEN`
+	// （只影响「运行环境」面板的说明文字与启动日志的换名提示）。
+	PublicPasswordFromToken bool
 	// AdminPassword `DISPATCH_ADMIN_PASSWORD`；nil = 启动生成随机口令。
 	AdminPassword *string
 	// AdminUser `DISPATCH_ADMIN_USER`；默认 admin。
@@ -97,14 +115,25 @@ type Config struct {
 // Rust 的 `from_env` 签名是 `-> Result<Self>`，但**实现上恒为 `Ok`**（无任何失败出口）。
 // Go 版据此直接返回 `Config`（不引入永不触发 error 的分支）。
 func FromEnv() Config {
+	// 对外口令：新名优先，旧名兜底。两者都设时不合并 —— 只认一个，
+	// 免得「改了新名没生效，因为旧名还在 compose 里」这种查半天的问题。
+	password := envOpt(EnvPublicPassword)
+	fromToken := false
+	if password == nil {
+		if legacy := envOpt(EnvPublicToken); legacy != nil {
+			password, fromToken = legacy, true
+		}
+	}
 	return Config{
-		PublicAddr:    envOr(EnvPublicAddr, DefaultPublicAddr),
-		AdminAddr:     envOr(EnvAdminAddr, DefaultAdminAddr),
-		DBPath:        envOr(EnvDB, DefaultDB),
-		MigrationsDir: envOr(EnvMigrations, DefaultMigrations),
-		LogLevel:      envOr(EnvLog, DefaultLogLevel),
-		PublicToken:   envOpt(EnvPublicToken),
-		AdminPassword: envOpt(EnvAdminPassword),
+		PublicAddr:              envOr(EnvPublicAddr, DefaultPublicAddr),
+		AdminAddr:               envOr(EnvAdminAddr, DefaultAdminAddr),
+		DBPath:                  envOr(EnvDB, DefaultDB),
+		MigrationsDir:           envOr(EnvMigrations, DefaultMigrations),
+		LogLevel:                envOr(EnvLog, DefaultLogLevel),
+		PublicUser:              strings.TrimSpace(envOr(EnvPublicUser, "")),
+		PublicPassword:          password,
+		PublicPasswordFromToken: fromToken,
+		AdminPassword:           envOpt(EnvAdminPassword),
 		// 默认用户名与 `internal/adminpass.DefaultUser` 保持一致（两处字面量，
 		// 因为 config 与 adminpass 同处层 1，互相 import 会破坏分层）。
 		AdminUser:         envOr(EnvAdminUser, DefaultAdminUser),
@@ -260,8 +289,12 @@ type EnvSnapshot struct {
 	AdminUser string
 	// AdminPasswordConfigured 管理口令是否由环境注入。
 	AdminPasswordConfigured bool
-	// PublicTokenConfigured `DISPATCH_PUBLIC_TOKEN` 是否已配置。
-	PublicTokenConfigured bool
+	// PublicUser 对外口登录用户名（空 = 不校验用户名）。
+	PublicUser string
+	// PublicPasswordConfigured 对外口口令是否已配置。
+	PublicPasswordConfigured bool
+	// PublicPasswordFromToken 对外口口令是否取自旧名 `DISPATCH_PUBLIC_TOKEN`。
+	PublicPasswordFromToken bool
 	// AllowFileDelete 是否允许删节点文件。
 	AllowFileDelete bool
 	// PublicCORS 是否开启对外口 CORS。
@@ -316,7 +349,22 @@ func (e EnvSnapshot) Items() []ConfigItem {
 		})
 	}
 
+	// 对外口三项连着放：端口 / 用户名 / 口令是一组，分开摆会让人以为某一项不可配。
 	push(EnvPublicAddr, e.PublicAddr, "medium", "对外推送端口监听地址（可能公网可达）")
+	publicUser := strings.TrimSpace(e.PublicUser)
+	if publicUser == "" {
+		publicUser = "(未设·不校验用户名)"
+	}
+	push(EnvPublicUser, publicUser, "low", "对外口用户名（真 BitComet 客户端登录框填这个）")
+	passwordDesc := "对外口口令（Bearer / Basic / Aria2 token 共用这个值）"
+	passwordText := configuredText(e.PublicPasswordConfigured, "已配置", "未配置（不校验）")
+	if e.PublicPasswordFromToken {
+		// 旧的键名仍被接受，但要在面板上说清「它生效了、且该换名了」——
+		// 否则用户按新文档配了 PASSWORD 却没生效（因为旧值还在），会怀疑人生。
+		passwordText = "已配置（取自旧名 DISPATCH_PUBLIC_TOKEN）"
+		passwordDesc = "对外口口令；当前生效值来自旧名 DISPATCH_PUBLIC_TOKEN，建议改名为 DISPATCH_PUBLIC_PASSWORD"
+	}
+	push(EnvPublicPassword, passwordText, "high", passwordDesc)
 	push(EnvAdminAddr, e.AdminAddr, "high", "管理后台监听地址（应仅内网）")
 	push(EnvDB, e.DBPath, "low", "SQLite 路径")
 	push(EnvMigrations, e.MigrationsDir, "low", "迁移目录")
@@ -334,9 +382,6 @@ func (e EnvSnapshot) Items() []ConfigItem {
 	push(EnvAdminPassword,
 		configuredText(e.AdminPasswordConfigured, "已配置", "（启动生成·仅本次有效）"),
 		"high", "管理口令是否由环境注入")
-	push(EnvPublicToken,
-		configuredText(e.PublicTokenConfigured, "已配置", "未配置（不校验）"),
-		"high", "对外口可选 token")
 	push(EnvAllowFileDelete, strconv.FormatBool(e.AllowFileDelete), "high", "是否允许删节点文件")
 	push(EnvPublicCORS, strconv.FormatBool(e.PublicCORS), "medium", "是否对 6800 回 ACAO")
 	push(EnvAdminCookieSecure, e.AdminCookieSecure.String(), "medium", "会话 Cookie 的 Secure 策略")

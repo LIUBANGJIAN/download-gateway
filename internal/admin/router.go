@@ -70,15 +70,9 @@ func NewRouter(st *state.AdminState, version string) http.Handler {
 	// ---- 会话 ----
 	mux.HandleFunc("POST /api/admin/login", s.login)
 	mux.HandleFunc("POST /api/admin/logout", s.logout)
-	// ---- 管理口令（用户可自行设置）----
-	// GET 只回「来源 + 上次修改时刻」，绝不回口令本身；
-	// POST 要求已登录 + CSRF + **旧口令正确**，改完立即生效。
-	mux.HandleFunc("GET /api/admin/password", s.passwordStatus)
-	mux.HandleFunc("POST /api/admin/password", s.changePassword)
-	// ---- 自助找回（**匿名**，登录页的「忘记口令」按钮）----
-	// 生成一次性临时口令，只写服务端日志、绝不回传；
-	// 凭「能读日志 = 能控制容器」证明身份，见 selfreset.go 的说明。
-	mux.HandleFunc("POST /api/admin/password/reset-request", s.requestTempPassword)
+	// **刻意没有**「改口令」与「忘记口令」两个入口：
+	// 管理账号密码由 docker-compose.yml 的环境变量唯一决定，不落库、界面不可改。
+	// 原因见 internal/adminpass 包注释（两个真相源会让「配了却不生效」成为必然事件）。
 	// ---- 总览 ----
 	mux.HandleFunc("GET /api/admin/summary", s.summary)
 	// ---- 任务：只读 + 干预，**没有创建** ----

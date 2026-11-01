@@ -50,13 +50,15 @@ ADM_PORT=18080
 ADMIN_PW="ci-smoke-pass-9f2c"
 # ⚠️ 对外口的共享令牌**必须显式设上**，否则鉴权门禁整体处于"放行"状态，
 # 下面那条「未认证必须 401」的断言就**永远不可能成立**（期望 401、实际 200 ⇒ 假红）。
-# 判定表在 `ingress/envelope.rs` 的 `AuthPolicy::decide`：
-#   · 未配置 public_token ⇒ 一律 Allow（无论带不带 Bearer）
-#   · 配置了 public_token  ⇒ 带对才算 Allow，否则 Deny
+# 判定表在 `internal/ingress/envelope.go` 的 `AuthPolicy.Decide`：
+#   · 未配置口令          ⇒ 一律 Allow（无论带不带凭据）
+#   · 配置了口令          ⇒ 带对才算 Allow，否则 Deny（Bearer / Basic 两种携带方式）
+#   · 另外配了用户名      ⇒ Basic 的用户名也必须对得上
 # 设上它，才能同时验证**拒绝路径**（不带凭据必须被拒）与**放行路径**（带对凭据必须通）——
 # 只验其中一边的鉴权测试是没意义的：只验拒绝，分不清"门禁在工作"还是"接口根本没实现"；
 # 只验放行，则完全测不出门禁是否存在。
-PUBLIC_TOKEN="ci-smoke-public-token-2f7a"
+PUBLIC_USER="ci-smoke-user"
+PUBLIC_PASSWORD="ci-smoke-public-token-2f7a"
 # 本次提交**应有**的版本号（由 CI 的 gate 作业算出后传入）。空 = 本地手动跑。
 EXPECT_VERSION="${EXPECT_VERSION:-}"
 PUB="http://127.0.0.1:${PUB_PORT}"
@@ -143,7 +145,8 @@ docker run -d --name "$CONTAINER" \
   -p "${ADM_PORT}:8080" \
   -e DISPATCH_ADMIN_PASSWORD="$ADMIN_PW" \
   -e DISPATCH_ADMIN_COOKIE_SECURE=never \
-  -e DISPATCH_PUBLIC_TOKEN="$PUBLIC_TOKEN" \
+  -e DISPATCH_PUBLIC_USER="$PUBLIC_USER" \
+  -e DISPATCH_PUBLIC_PASSWORD="$PUBLIC_PASSWORD" \
   -e RUST_LOG=info \
   "$IMAGE" >/dev/null
 
@@ -184,6 +187,15 @@ logs="$(docker logs "$CONTAINER" 2>&1)"
 expect_contains "启动日志声明调度内核已启用" "$logs" "调度内核已启用"
 expect_absent "启动日志不应再声明『调度器未实现』" "$logs" "调度器与节点下发未实现"
 
+echo "── 3c. 对外口凭据的启动自报 ────────────────────────────────────"
+# 断言日志而不是断言配置：这三条能同时抓到「变量名写错」「用户名被忽略」
+# 「新名没生效、走的还是旧名」三种故障 —— 它们在接口层面都表现为"能通"。
+expect_contains "启动日志声明对外口鉴权已启用" "$logs" "对外口鉴权已启用"
+expect_absent "用新名时不得提示取自旧名（否则说明新名没生效）" "$logs" "取自旧名"
+# 配了口令却没配用户名时必须明确警告「用户名不参与校验」——
+# 少了这条，用户会以为 compose 里那个账号在起作用。
+expect_absent "配了用户名时不应再警告用户名未设" "$logs" "未设 DISPATCH_PUBLIC_USER"
+
 echo
 echo "── 4. 对外口 · aria2 原生协议面 ────────────────────────────────"
 # 4a. **拒绝路径**：不带 token 必须被拒。
@@ -200,7 +212,7 @@ expect_contains "aria2 未带 token 的提示" "$payload" 'Unauthorized'
 expect_absent "aria2 未带 token 时不得返回 result" "$payload" '"result"'
 
 # 4b. **放行路径**：按 aria2 官方手册，token 放在 params[0] 的 `"token:<值>"`。
-ARIA_BODY="{\"jsonrpc\":\"2.0\",\"id\":\"smoke-1\",\"method\":\"aria2.getVersion\",\"params\":[\"token:${PUBLIC_TOKEN}\"]}"
+ARIA_BODY="{\"jsonrpc\":\"2.0\",\"id\":\"smoke-1\",\"method\":\"aria2.getVersion\",\"params\":[\"token:${PUBLIC_PASSWORD}\"]}"
 resp="$(curl -s --max-time 10 -w '\n%{http_code}' -H 'Content-Type: application/json' \
   -d "$ARIA_BODY" "${PUB}/jsonrpc")"
 code="$(printf '%s' "$resp" | tail -1)"
@@ -228,7 +240,7 @@ expect_contains "BitComet 未认证错误码" "$payload" "INVALID_TOKEN"
 
 # 5b. **放行路径**：带正确 Bearer → 200 且 error_code=OK。
 resp="$(curl -s --max-time 10 -w '\n%{http_code}' -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer ${PUBLIC_TOKEN}" -d '{}' "${PUB}/api/config/about/get")"
+  -H "Authorization: Bearer ${PUBLIC_PASSWORD}" -d '{}' "${PUB}/api/config/about/get")"
 code="$(printf '%s' "$resp" | tail -1)"
 payload="$(printf '%s' "$resp" | sed '$d')"
 expect "POST ${PUB}/api/config/about/get（带正确 Bearer）" 200 "$code" "$payload"
@@ -240,6 +252,30 @@ resp="$(curl -s --max-time 10 -w '\n%{http_code}' -H 'Content-Type: application/
   -H 'Authorization: Bearer definitely-wrong' -d '{}' "${PUB}/api/config/about/get")"
 code="$(printf '%s' "$resp" | tail -1)"
 expect "POST ${PUB}/api/config/about/get（错误 Bearer）" 401 "$code" "$(printf '%s' "$resp" | sed '$d')"
+
+# 5c-2. Basic 认证：本轮新增的「账号 + 密码」携带方式。
+# 单独验它的理由：Bearer 只有一个值、没有用户名位置，所以「账号」这个概念
+# 只在 Basic 与真 BitComet 客户端登录框里能生效 —— 不验这两处，compose 里
+# 填的用户名就是个装饰。
+BASIC_OK="$(printf '%s:%s' "$PUBLIC_USER" "$PUBLIC_PASSWORD" | base64 | tr -d '\n')"
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' -H 'Content-Type: application/json' \
+  -H "Authorization: Basic ${BASIC_OK}" -d '{}' "${PUB}/api/config/about/get")"
+code="$(printf '%s' "$resp" | tail -1)"
+expect "POST ${PUB}/api/config/about/get（Basic 用户名+口令）" 200 "$code" "$(printf '%s' "$resp" | sed '$d')"
+
+# 用户名错、口令对 → 必须被拒（否则用户名没参与校验）。
+BASIC_BADUSER="$(printf '%s:%s' "not-the-user" "$PUBLIC_PASSWORD" | base64 | tr -d '\n')"
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' -H 'Content-Type: application/json' \
+  -H "Authorization: Basic ${BASIC_BADUSER}" -d '{}' "${PUB}/api/config/about/get")"
+code="$(printf '%s' "$resp" | tail -1)"
+expect "POST ${PUB}/api/config/about/get（Basic 用户名错）" 401 "$code" "$(printf '%s' "$resp" | sed '$d')"
+
+# 用户名对、口令错 → 必须被拒。
+BASIC_BADPASS="$(printf '%s:%s' "$PUBLIC_USER" "not-the-password" | base64 | tr -d '\n')"
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' -H 'Content-Type: application/json' \
+  -H "Authorization: Basic ${BASIC_BADPASS}" -d '{}' "${PUB}/api/config/about/get")"
+code="$(printf '%s' "$resp" | tail -1)"
+expect "POST ${PUB}/api/config/about/get（Basic 口令错）" 401 "$code" "$(printf '%s' "$resp" | sed '$d')"
 
 # 5d. 握手第一步不需要凭据（这是三段式握手的入口，缺了它真客户端连不进来）。
 resp="$(curl -s --max-time 10 -w '\n%{http_code}' -X POST "${PUB}/api/webui/ip_verify")"
@@ -314,6 +350,21 @@ resp="$(curl -s --max-time 10 -w '\n%{http_code}' -H 'Content-Type: application/
   -d "{\"username\":\"not-admin\",\"password\":\"${ADMIN_PW}\"}" "${ADM}/api/admin/login")"
 code="$(printf '%s' "$resp" | tail -1)"
 expect "POST ${ADM}/api/admin/login（错误用户名 + 正确口令）" 401 "$code" "$(printf '%s' "$resp" | sed '$d')"
+
+# 改口令 / 自助找回两个接口必须**真的删掉**（本轮的设计决定：账号密码只由
+# docker-compose.yml 决定，不落库、界面不可改）。断言 404 而不是「不可用」：
+# 路由不存在时 mux 才会回 404，若还在（哪怕 handler 里 return 403）就说明没删干净。
+for m in GET POST; do
+  resp="$(curl -s --max-time 10 -w '\n%{http_code}' -X "$m" -b "$COOKIE_JAR" \
+    -H 'Content-Type: application/json' -d '{"current_password":"x","new_password":"y"}' \
+    "${ADM}/api/admin/password")"
+  code="$(printf '%s' "$resp" | tail -1)"
+  expect "${m} ${ADM}/api/admin/password（接口应已删除）" 404 "$code" "$(printf '%s' "$resp" | sed '$d')"
+done
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{}' "${ADM}/api/admin/password/reset-request")"
+code="$(printf '%s' "$resp" | tail -1)"
+expect "POST ${ADM}/api/admin/password/reset-request（接口应已删除）" 404 "$code" "$(printf '%s' "$resp" | sed '$d')"
 
 # 只带 Origin、**不带** Sec-Fetch-Site 的写请求必须放行。
 # 这条锁的是一次线上事故：Go 的 net/http 把 Host 从 Header 挪进 Request.Host，

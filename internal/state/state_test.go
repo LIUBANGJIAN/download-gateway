@@ -11,9 +11,10 @@ import (
 // 对照 Rust `PublicState::new`：session_id 由内部生成（128bit 十六进制），其余字段原样透传。
 func TestNewPublicState(t *testing.T) {
 	tok := "secret-token"
+	user := "ops"
 	tokens := handshake.NewStore()
 	hs := HandshakeState{ProxyClientID: "cid-1", Tokens: tokens}
-	ps := NewPublicState(nil, 1_700_000_000, &tok, true, hs)
+	ps := NewPublicState(nil, 1_700_000_000, &user, &tok, true, hs)
 
 	if ps.Store != nil {
 		t.Fatalf("Store 应原样透传（此处为 nil）")
@@ -21,8 +22,11 @@ func TestNewPublicState(t *testing.T) {
 	if ps.StartedAt != 1_700_000_000 {
 		t.Fatalf("StartedAt 应为 1700000000，实际 %d", ps.StartedAt)
 	}
-	if ps.PublicToken == nil || *ps.PublicToken != "secret-token" {
-		t.Fatalf("PublicToken 应透传，实际 %v", ps.PublicToken)
+	if ps.PublicPassword == nil || *ps.PublicPassword != "secret-token" {
+		t.Fatalf("PublicPassword 应透传，实际 %v", ps.PublicPassword)
+	}
+	if ps.PublicUser == nil || *ps.PublicUser != "ops" {
+		t.Fatalf("PublicUser 应透传，实际 %v", ps.PublicUser)
 	}
 	if !ps.CORSEnabled {
 		t.Fatalf("CORSEnabled 应为 true")
@@ -45,18 +49,41 @@ func TestNewPublicState(t *testing.T) {
 
 // 「session_id 进程内唯一（重启即变）」的可观测判据：两次构造必须不同。
 func TestNewPublicStateSessionIDIsUnique(t *testing.T) {
-	a := NewPublicState(nil, 0, nil, false, HandshakeState{})
-	b := NewPublicState(nil, 0, nil, false, HandshakeState{})
+	a := NewPublicState(nil, 0, nil, nil, false, HandshakeState{})
+	b := NewPublicState(nil, 0, nil, nil, false, HandshakeState{})
 	if a.SessionID == b.SessionID {
 		t.Fatalf("两次构造的 SessionID 不应相同：%q", a.SessionID)
 	}
 }
 
-// 未配置 public token（nil）时字段应保持 nil（而非空串）。
-func TestNewPublicStateNilTokenStaysNil(t *testing.T) {
-	ps := NewPublicState(nil, 0, nil, false, HandshakeState{})
-	if ps.PublicToken != nil {
-		t.Fatalf("未配置 token 时应为 nil，实际 %v", ps.PublicToken)
+// 未配置对外凭据（nil）时字段应保持 nil（而非空串）——
+// 空串会让 Basic 认证变成「用户名必须是空」的荒谬要求。
+func TestNewPublicStateNilCredentialsStayNil(t *testing.T) {
+	ps := NewPublicState(nil, 0, nil, nil, false, HandshakeState{})
+	if ps.PublicPassword != nil || ps.PublicUser != nil {
+		t.Fatalf("未配置时应均为 nil，实际 user=%v pass=%v", ps.PublicUser, ps.PublicPassword)
+	}
+	if _, _, configured := ps.PublicAuth(); configured {
+		t.Fatal("未配置时 PublicAuth 必须报 configured=false")
+	}
+}
+
+// PublicAuth 是鉴权判定表的唯一输入，契约：用户名为空 = 不校验用户名。
+func TestPublicAuthContract(t *testing.T) {
+	pass := "pw"
+	ps := NewPublicState(nil, 0, nil, &pass, false, HandshakeState{})
+	if user, pw, ok := ps.PublicAuth(); !ok || user != "" || pw != "pw" {
+		t.Fatalf("未配用户名：应 ok=true、user 为空、口令透传，实际 %q/%q/%v", user, pw, ok)
+	}
+	user := "ops"
+	ps2 := NewPublicState(nil, 0, &user, &pass, false, HandshakeState{})
+	if u, pw, ok := ps2.PublicAuth(); !ok || u != "ops" || pw != "pw" {
+		t.Fatalf("配了用户名：应原样透传，实际 %q/%q/%v", u, pw, ok)
+	}
+	// nil 接收者不得 panic（handler 在极端情况下可能拿到 nil state）。
+	var nilState *PublicState
+	if _, _, ok := nilState.PublicAuth(); ok {
+		t.Fatal("nil state 必须报 configured=false")
 	}
 }
 
@@ -114,7 +141,7 @@ func TestNewAdminStateEnvIsSnapshotCopy(t *testing.T) {
 // 这条锁住「包名没有被人改动」这一事实，避免有人把两处合并。
 func TestPackageIdentityIsState(t *testing.T) {
 	// 纯编译期可见性断言：NewPublicState 返回 *PublicState（而非 domain 类型）。
-	var ps *PublicState = NewPublicState(nil, 0, nil, false, HandshakeState{})
+	var ps *PublicState = NewPublicState(nil, 0, nil, nil, false, HandshakeState{})
 	if ps == nil {
 		t.Fatalf("NewPublicState 不应返回 nil")
 	}

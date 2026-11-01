@@ -103,7 +103,7 @@ curl -fsS http://127.0.0.1:6800/jsonrpc -H 'Content-Type: application/json' \
 #      自己的 params[0] 携带（外层若也放了，会被剥离后忽略，不会报错）。
 ```
 
-> 设了 `DISPATCH_PUBLIC_TOKEN` 时，**每条**调用的 `params[0]` 要放 `"token:<值>"`：
+> 设了 `DISPATCH_PUBLIC_PASSWORD` 时，**每条**调用的 `params[0]` 要放 `"token:<口令>"`（旧名 `DISPATCH_PUBLIC_TOKEN` 同样生效）：
 > `"params":["token:你的令牌"]`（addUri 则是 `"params":["token:你的令牌",["magnet:..."]]`）。
 > 缺失/错误 → `{"error":{"code":-1,"message":"Unauthorized"},...}`。
 
@@ -111,7 +111,7 @@ curl -fsS http://127.0.0.1:6800/jsonrpc -H 'Content-Type: application/json' \
 
 ```bash
 # 3a. 没握手就打业务接口 → 必须 401（这是门禁在工作的证据，不是故障）
-#     ⚠️ **前提：必须设了 `DISPATCH_PUBLIC_TOKEN`。** 没设的话判定表第 5/6 行是「一律放行」，
+#     ⚠️ **前提：必须设了 `DISPATCH_PUBLIC_PASSWORD`。** 没设的话判定表是「一律放行」，
 #        这里会返回 200 —— 那是设计如此（默认不校验），不是门禁坏了。
 #        BitComet 面**全部 7 条业务路由**共用同一个 `deny_if_unauthorized`，口径一致。
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:6800/api/task/http/add
@@ -257,13 +257,15 @@ IMAGE_TAG=sha-eb6a12c docker compose up -d       # 或写进同目录的 .env
 
 ```bash
 cat > .env <<EOF
-DISPATCH_PUBLIC_TOKEN=$(openssl rand -hex 24)
+DISPATCH_PUBLIC_USER=bitcomet
+DISPATCH_PUBLIC_PASSWORD=$(openssl rand -hex 24)
+DISPATCH_ADMIN_USER=admin
 DISPATCH_ADMIN_PASSWORD=$(openssl rand -hex 18)
 DISPATCH_SECRET_KEY=$(openssl rand -hex 32)
 EOF
 ```
 
-> ⚠️ 不要手写 `DISPATCH_PUBLIC_TOKEN=$(openssl rand -hex 24)` 塞进 `.env` ——
+> ⚠️ 不要手写 `DISPATCH_PUBLIC_PASSWORD=$(openssl rand -hex 24)` 塞进 `.env` ——
 > **`.env` 文件只做 `${VAR}` 插值，不执行命令替换**。那样得到的令牌就是
 > `$(openssl rand -hex 24)` 这串字面量本身；而它**长度刚好能过 `DISPATCH_SECRET_KEY`
 > 的 16 字符下限**，于是校验全绿、所有人共用同一个假密钥，比不设还糟。
@@ -275,24 +277,32 @@ EOF
 
 | 变量 | 不设的后果 |
 |---|---|
-| `DISPATCH_PUBLIC_TOKEN` | 6800 **完全不校验** —— 任何能连上这个端口的人都能投任务、翻任务列表 |
-| `DISPATCH_ADMIN_PASSWORD` | 每次启动随机生成，只打印在 `docker logs` 里；重启就得重新翻日志，连错 5 次锁 5 分钟 |
+| `DISPATCH_PUBLIC_PASSWORD` | 6800 **完全不校验** —— 任何能连上这个端口的人都能投任务、翻任务列表 |
+| `DISPATCH_PUBLIC_USER` | 只校验口令、**不校验用户名**（启动日志会 warn 提醒）。老部署只配过一个 token 时就是这种状态 |
+| `DISPATCH_ADMIN_USER` / `DISPATCH_ADMIN_PASSWORD` | 口令每次启动随机生成，只打印在 `docker logs` 里；重启就得重新翻日志，连错 5 次锁 5 分钟 |
 | `DISPATCH_SECRET_KEY` | 自动生成并落盘到 `/data/node-secret.key`。**只在本卷内安全**；换成宿主目录、或把库还原到另一台机器而没带密钥文件时，已存节点口令全部解不开 |
 
 改完 `docker compose up -d` 生效，并用启动日志确认闸门是**开**的：
 
 ```bash
-docker compose logs gateway | grep -E '对外口未配置|DISPATCH_PUBLIC_TOKEN'
-# 出现「对外口未配置 DISPATCH_PUBLIC_TOKEN：6800 无鉴权」= 没生效，回去检查 .env 有没有被读到
+docker compose logs gateway | grep -E '对外口未配置|对外口鉴权|未设 DISPATCH_PUBLIC_USER'
+# 「对外口鉴权已启用 ... schemes=...」        = 口令与用户名都在起作用
+# 「对外口已配置口令但未设 DISPATCH_PUBLIC_USER」= 只验口令，用户名不参与（这是可以的正常状态）
+# 「对外口未配置 DISPATCH_PUBLIC_PASSWORD」   = 没生效，回去检查 .env 有没有被读到
 ```
 
-客户端带令牌的三种方式（同一个值）：
+客户端带凭据的三种方式（**口令是同一个值**）：
 
-| 客户端 | 怎么带 |
-|---|---|
-| Aria2 / AriaNg | 每条调用 `params[0]` 放 `"token:<值>"`；AriaNg 在「设置 → RPC」里填同一个值 |
-| BitComet 协议 | 请求头 `Authorization: Bearer <值>` |
-| 真 BitComet 客户端（走自签握手） | 登录框里**密码填这个令牌值**（用户名不校验）。设了令牌后，密码不匹配一律握手失败 |
+| 客户端 | 怎么带 | 用户名参与吗 |
+|---|---|---|
+| Aria2 / AriaNg | 每条调用 `params[0]` 放 `"token:<口令>"`；AriaNg 在「设置 → RPC」里填同一个值 | 否（协议里没有位置） |
+| BitComet 协议 / 脚本 | 请求头 `Authorization: Bearer <口令>` | 否（同上，向后兼容） |
+| BitComet 协议 / 脚本 | 请求头 `Authorization: Basic base64(用户名:口令)` | **是** |
+| 真 BitComet 客户端（自签握手） | 登录框里**用户名/口令分别填** `DISPATCH_PUBLIC_USER` 与 `DISPATCH_PUBLIC_PASSWORD` | **是** |
+
+> 用户名为什么只在这两处生效：Bearer 与 Aria2 的 `token:` 都只有一个值，协议里没有用户名的位置。
+> 强行要求它们带用户名等于破坏所有现成客户端。所以 `DISPATCH_PUBLIC_USER` 只影响
+> Basic 认证与真 BitComet 客户端的登录框 —— 这也正是「账号 + 密码」这个概念唯一有意义的地方。
 
 两条必须知道的：
 
@@ -305,67 +315,44 @@ docker compose logs gateway | grep -E '对外口未配置|DISPATCH_PUBLIC_TOKEN'
 
 ## 忘记管理口令怎么办
 
-口令在管理台改过之后，库里存的是不可逆哈希，而且**启动时会明确忽略** `DISPATCH_ADMIN_PASSWORD`
-（日志里会写「环境变量中的初始口令不再参与校验」）。忘了就是登不进去、也改不了。
-运行镜像基于 alpine、以 uid 10001 运行、**不带 sqlite3**，「拷库出来手改」这条路基本走不通。
-所以给两条补救路径，都建立在同一个前提上：**能读日志 / 能进容器 = 你是这台机器的主人**。
+**改 `docker-compose.yml`，重启容器。** 只有这一条路径 —— 因为口令只存在于一个地方：部署配置。
 
-### 路径一：登录页「忘记口令？」按钮（日常用这条）
-
-1. 打开登录页 → 展开 **忘记口令？** → 点 **生成临时口令**；
-2. 到宿主机取口令：
-
-   ```bash
-   docker logs <容器名> 2>&1 | grep temp_password | tail -1
-   #   → level=WARN msg="已生成一次性临时管理口令..." temp_password=K7M2QX9RTP4W expires_in_seconds=600
-   ```
-
-3. 用这串临时口令登录 → 到「设置」里改成自己的口令。
-
-几个要点：
-
-- **口令只出现在日志里**，接口响应里没有 —— 否则这个匿名接口就等于「点一下就能拿到管理口令」。
-- **默认 10 分钟有效**（`DISPATCH_TEMP_PASSWORD_TTL`），任何时刻只有最新一串有效；
-  改完口令、或再点一次生成，旧的立即失效。
-- **原口令不会失效**。所以别人乱点这个按钮只能刷出几行日志，锁不了你
-  （这也是刻意**不**采用「覆盖原口令」实现的原因：那种做法谁点一下都能造成拒绝服务）。
-- 生成频率受限：同一 IP 60 秒 1 次、全局 10 分钟 5 次，返回 `429` 并带 `Retry-After`。
-- 每次生成都留一条 `security` 审计（`event_log`，级别 `warn`，**不记口令**）。
-- 不想要这个入口：`DISPATCH_ALLOW_SELF_RESET=0`（之后该路径返回 404，不暴露「有功能但被禁」）。
-
-⚠️ 这串口令会进日志，所以**日志的访问权限 = 管理台的访问权限**。
-集中式日志、日志备份、日志转发到第三方平台时，请把 `temp_password` 字段纳入脱敏规则，
-或者干脆关掉这个入口、改用下面的命令行方式。
-
-### 路径二：命令行重置（日志拿不到时）
-
-```bash
-# 生成随机口令并写库（不用当场想口令，也不进 shell history）
-docker exec <容器名> download-gateway reset-password
-#   → 新口令（随机生成）：9f3c...（32 位十六进制，只显示这一次）
-
-# 指定新口令（10–128 个字符）
-docker exec <容器名> download-gateway reset-password --password '你要的新口令'
-
-# 清掉口令，回到部署时的 DISPATCH_ADMIN_PASSWORD（没设则每次启动随机生成）
-docker exec <容器名> download-gateway reset-password --clear
-
-# 三条都要重启才生效：进程的凭据在内存里，它不会察觉库变了
-docker restart <容器名>
+```yaml
+    environment:
+      DISPATCH_ADMIN_USER: 你的用户名
+      DISPATCH_ADMIN_PASSWORD: 你的新口令
 ```
 
-裸机部署把 `docker exec <容器名> download-gateway` 换成二进制路径、`docker restart` 换成
-`systemctl restart download-gateway`，参数完全一样。
+```bash
+docker compose up -d      # 重建容器，数据在卷里不受影响
+```
 
-**必须重启**是这条路径的特点（临时口令那条不用）：命令直接改库、不通知运行中的进程，
-不重启时的表现是「新口令登不进、旧口令还能登」—— 不是命令失败，是内存凭据还没换
-（`scripts/password-reset-e2e.sh` 专门断言了这一段）。
+如果这两项**都没配**，口令是每次启动随机生成的，只在启动日志里：
 
-### 为什么不做「密保问题 / 邮箱找回」
+```bash
+docker logs <容器名> 2>&1 | grep 随机管理口令
+#   → level=WARN msg="DISPATCH_ADMIN_PASSWORD 未设置：已生成随机管理口令（仅本次启动有效，重启会变）..."
+#                     username=admin password=9f3c...
+```
 
-自托管网关没有邮箱、没有短信、没有第二个管理员，能用来自证的只有**宿主机控制权**
-（读日志、`docker exec`、改 compose）。任何不依赖它的自助恢复都得多存一份「能重置口令的凭据」，
-那本身就是新的攻击面；而依赖它的方案，成本已经压到「点一下按钮 + 看一眼日志」了。
+### 为什么没有「改口令」界面，也没有「忘记密码」按钮
+
+v0.1.18 之前有三条补救路径（界面改口令、登录页自助临时口令、`reset-password` 子命令）。
+它们其实是同一个设计缺陷的三块补丁：**口令有两个真相源** —— compose 的环境变量，
+以及库里那份 argon2id 哈希，而且后者优先。在界面改过口令之后，compose 里那一行就悄悄失效了
+（日志会说一句，但没人天天翻启动日志），于是「我明明配了 X，为什么登录不上」成了必然会发生的问题；
+为了给这个死锁兜底，又得再维护两套恢复流程。
+
+现在只有一个真相源：`DISPATCH_ADMIN_PASSWORD`。忘记口令 = 改 compose 重启 ——
+和改端口、改卷路径一样，属于**宿主机操作**。能改 compose 的人本来就能改库、换镜像、删卷，
+所以这并没有降低安全性。反过来，任何**不**依赖宿主机控制权的自助恢复（密保问题、邮件找回）
+都会额外长出一个可被攻击的面：自托管网关没有邮箱、没有第二个管理员，
+能拿来自证的只有宿主机控制权。
+
+> **从旧版本升级**：库里原来的 `admin.password_hash` / `admin.password_updated_at` 两行
+> 会被 V2 迁移删除（`migrations/V2__drop_admin_password.sql`）。
+> 若你之前**在管理台改过口令**、而 compose 里没配 `DISPATCH_ADMIN_PASSWORD`，
+> 升级后会退回「启动随机生成」—— 从启动日志里取新口令，然后写进 compose。
 
 ## 配置
 
@@ -386,8 +373,9 @@ docker restart <容器名>
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `DISPATCH_PUBLIC_TOKEN` | 未设＝**不校验** | 共享令牌。Aria2 面走 `params[0]` 的 `"token:<值>"`；BitComet 面走 `Authorization: Bearer <值>`。**它同时是自签握手解出 `password` 的判据**——设了它，客户端必须拿同一个值当 `password` 才能从 `/api/webui/login` 换到 `invite_token`，否则握手一律失败（这是堵住"自造 client_id 换 device_token 绕过门禁"的承重墙） |
-| `DISPATCH_PUBLIC_CORS` | `false` | 是否对 6800 回 `Access-Control-Allow-Origin: *` 并处理 OPTIONS 预检。默认关：开了之后**任何你访问过的网页**都能跨源往这台机器投递任务（drive-by）。开它必须同时设 `DISPATCH_PUBLIC_TOKEN`，否则启动时打 `warn` |
+| `DISPATCH_PUBLIC_USER` | 未设＝**不校验用户名** | 对外口用户名。只影响 `Authorization: Basic` 与真 BitComet 客户端的登录框（Bearer 和 Aria2 `token:` 都没有用户名位置）。设了之后这两处必须对上，否则 401 |
+| `DISPATCH_PUBLIC_PASSWORD` | 未设＝**不校验** | 对外口口令。Aria2 面走 `params[0]` 的 `"token:<口令>"`；BitComet 面走 `Authorization: Bearer <口令>` 或 `Basic base64(用户名:口令)`。**它同时是自签握手解出 `password` 的判据**——设了它，客户端必须拿同一个值当 `password` 才能从 `/api/webui/login` 换到 `invite_token`，否则握手一律失败（这是堵住"自造 client_id 换 device_token 绕过门禁"的承重墙）。旧名 `DISPATCH_PUBLIC_TOKEN` 仍被接受（两者都设时只认新名），启动日志会提示换名 |
+| `DISPATCH_PUBLIC_CORS` | `false` | 是否对 6800 回 `Access-Control-Allow-Origin: *` 并处理 OPTIONS 预检。默认关：开了之后**任何你访问过的网页**都能跨源往这台机器投递任务（drive-by）。开它必须同时设 `DISPATCH_PUBLIC_PASSWORD`，否则启动时打 `warn` |
 
 **管理口（8080）**
 
@@ -399,8 +387,6 @@ docker restart <容器名>
 | `DISPATCH_WEB_DIR` | 未设＝用**编进二进制的内嵌页面** | 指向磁盘目录以覆盖内嵌页面（改完刷新即生效，不用重编译）。需配合把宿主目录挂进容器 |
 | `DISPATCH_ALLOW_FILE_DELETE` | `false` | 是否允许"连节点上的文件一起删"。默认关：删磁盘文件**不可逆**，且节点侧删除能力（T05）尚未落地，现在放开等于让一个没接通的开关可被误触 |
 | `DISPATCH_SECRET_KEY` | 未设＝读/写 `<库目录>/node-secret.key`（不存在则**自动生成** 32 字节随机并落盘） | 节点口令的**可逆加密主密钥**。管理台的节点列表要支持「点眼睛看密码」，所以节点口令必须**可解密回明文**——只能加密不能解密是做不到这个功能的。链路复用 BitComet 客户端的 RNCryptor v3 实现（PBKDF2-HMAC-SHA1×10000 → AES-256-CBC → HMAC-SHA256），**没有引入新的加密 crate**。⚠️ 容器部署时那个密钥文件必须落在**持久化卷**里：它一旦丢失，已存的节点口令就再也解不开（启动日志在自动生成时会打 `WARN`）。多实例/重建容器想沿用同一把钥匙，就把这个变量显式设上 |
-| `DISPATCH_ALLOW_SELF_RESET` | `true` | 是否开放登录页的「忘记口令？」入口。设为 `0/false/off/no` 后 `POST /api/admin/password/reset-request` 返回 404（不暴露「有功能但被禁」）。关掉后只能用 `reset-password` 子命令补救 |
-| `DISPATCH_TEMP_PASSWORD_TTL` | `600` | 一次性临时口令的有效期（秒，允许 30–86400，越界或无法解析时**静默回落 600**）。临时口令只写在日志里，见「忘记管理口令怎么办」 |
 
 缺失或**全空白**的变量一律回落默认值（`env_or` 把空白也当未设置）；布尔量接受 `1/true/yes/on` 与 `0/false/no/off`（大小写不敏感，无法识别时回落默认）。
 
@@ -568,7 +554,7 @@ docker-compose.yml      部署用 Compose（命名卷 / 管理口只绑回环 / 
   代价是稳态下每 15 秒一次无谓请求，**不影响正确性**。
 - **`missing_on_node` / `external` 两个内部状态仍在白名单里没落地**（现在只写 `event_log`）。
   它们不进 `tellStopped` 也不影响调度，但管理台看不到这两个分类。
-- **`:6800` 未配 `DISPATCH_PUBLIC_TOKEN` 时无鉴权** —— 与 aria2 的裸口行为一致，属**按设计**；
+- **`:6800` 未配 `DISPATCH_PUBLIC_PASSWORD` 时无鉴权** —— 与 aria2 的裸口行为一致，属**按设计**；
   要暴露到不可信网络就必须配上它。
 - ~~**T03–T07**：节点健康检查 / 调度器选点 / 真正下发 / 轮询同步~~ →
   **已于 2026-10-18 落地**，见上面「链路已闭合（B1）」。启动日志会明确写出

@@ -1,0 +1,17 @@
+-- ============================================================
+-- V2：管理账号密码不再落库（口令唯一来源 = docker-compose.yml）
+-- ============================================================
+-- 上一版把「在管理台改过的口令」存成 argon2id PHC 串放在 app_config 里，
+-- 启动时**优先于** DISPATCH_ADMIN_PASSWORD 生效。这产生两个真相源：
+-- 界面上改过之后，compose 里那一行就悄悄失效了（日志会说一句，但没人天天翻日志）。
+-- 结果「我明明配了 X，为什么登录不上」成了一种必然会发生的问题。
+--
+-- 本迁移清掉这两行。此后：
+--   · 口令只来自 DISPATCH_ADMIN_PASSWORD（未设则启动随机生成，只打在启动日志里）；
+--   · app_config 只放业务策略（policy.* / scheduler.enabled），不再有任何凭据。
+--
+-- ⚠️ 升级影响（README「从旧版本升级」一节也写了）：
+-- 如果之前**在管理台改过口令**、而 compose 里没配 DISPATCH_ADMIN_PASSWORD，
+-- 升级后会退回「启动随机生成」—— 登录口令变成启动日志里那一串。
+-- 升级前先把口令写进 compose，或在启动日志里取新口令后写进去。
+DELETE FROM app_config WHERE key IN ('admin.password_hash', 'admin.password_updated_at');

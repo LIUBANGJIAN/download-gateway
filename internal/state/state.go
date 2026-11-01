@@ -46,8 +46,13 @@ type PublicState struct {
 	Store *store.Store
 	// StartedAt 进程启动时刻（Unix 秒），供 `/healthz` 计算 uptime。
 	StartedAt int64
-	// PublicToken `DISPATCH_PUBLIC_TOKEN`；nil = 不校验。
-	PublicToken *string
+	// PublicUser 对外口登录用户名；nil = 不校验用户名（只认口令）。
+	//
+	// 为 nil 是**有意的兼容路径**：老部署只配过一个 token，没有用户名概念。
+	PublicUser *string
+	// PublicPassword 对外口口令（`DISPATCH_PUBLIC_PASSWORD`，旧名 `_TOKEN`）；
+	// nil = 不校验。
+	PublicPassword *string
 	// SessionID `aria2.getSessionInfo` 用的进程级 session id（128bit 十六进制，重启即变）。
 	SessionID string
 	// CORSEnabled `DISPATCH_PUBLIC_CORS`；true 才回 `Access-Control-Allow-Origin`。
@@ -59,20 +64,23 @@ type PublicState struct {
 // NewPublicState 构造对外口状态。`session_id` 在进程内唯一（重启即变）。
 //
 // 对照 Rust `PublicState::new`：内部生成 `ids::new_hex_128()` 作为 session id。
+// `publicUser` / `publicPassword` 是本轮新增的账号密码维度（见 [PublicState]）。
 func NewPublicState(
 	store *store.Store,
 	startedAt int64,
-	publicToken *string,
+	publicUser *string,
+	publicPassword *string,
 	corsEnabled bool,
 	handshake HandshakeState,
 ) *PublicState {
 	return &PublicState{
-		Store:       store,
-		StartedAt:   startedAt,
-		PublicToken: publicToken,
-		SessionID:   ids.NewHex128(),
-		CORSEnabled: corsEnabled,
-		Handshake:   handshake,
+		Store:          store,
+		StartedAt:      startedAt,
+		PublicUser:     publicUser,
+		PublicPassword: publicPassword,
+		SessionID:      ids.NewHex128(),
+		CORSEnabled:    corsEnabled,
+		Handshake:      handshake,
 	}
 }
 

@@ -52,15 +52,16 @@
         <button type="submit" class="primary block">登录</button>
       </form>
       <div id="login-error" class="error-bar" role="alert" hidden></div>
-      <!-- 忘记口令：口令只进服务端日志，取口令需要宿主机的日志读权限。
-           这就是本产品的「身份证明」——不是邮箱、不是密保，而是容器控制权。 -->
+      <!-- 忘记口令：这里刻意**不给**自助入口。
+           账号密码由 docker-compose.yml 的环境变量唯一决定，不落库、界面不可改，
+           「找回」就是改 compose 重启 —— 能改 compose 的人本来就能改库、换镜像、删卷。
+           任何不依赖宿主机控制权的自助恢复都会额外长出一个可被攻击的面。 -->
       <details class="forgot">
-        <summary>忘记口令？</summary>
-        <p class="hint">临时口令<b>只写在服务端日志里</b>，不会显示在本页面。生成后在宿主机执行：</p>
-        <p class="hint"><code>docker logs &lt;容器名&gt; | grep temp_password</code></p>
-        <p class="hint">默认 10 分钟内有效，用它登录后请立即到「设置」里改成自己的口令。原口令不会因此失效。</p>
-        <button type="button" id="reset-request-btn">生成临时口令</button>
-        <div id="reset-request-result" class="hint" hidden></div>
+        <summary>忘记口令怎么办？</summary>
+        <p class="hint">账号密码由部署配置决定，<b>不在界面修改、也不存数据库</b>。改 <code>docker-compose.yml</code> 里这两行后重启容器：</p>
+        <p class="hint"><code>DISPATCH_ADMIN_USER</code> / <code>DISPATCH_ADMIN_PASSWORD</code></p>
+        <p class="hint">若这两项都没配，口令是每次启动随机生成的，只在启动日志里：</p>
+        <p class="hint"><code>docker logs &lt;容器名&gt; | grep 随机管理口令</code></p>
       </details>
     </div>
   </section>
@@ -226,26 +227,17 @@
       </table>
     </div>
 
-    <!-- ---- 管理口令（用户可自行设置）---- -->
-    <div class="card" id="pw-card">
-      <h3 class="card-title">管理口令</h3>
-      <p class="hint" id="pw-note">正在读取当前口令来源…</p>
-      <div class="form-grid">
-        <label>当前口令
-          <input id="pw-current" type="password" autocomplete="current-password" />
-        </label>
-        <label>新口令（至少 10 个字符）
-          <input id="pw-new" type="password" autocomplete="new-password" />
-        </label>
-        <label>再输一次
-          <input id="pw-confirm" type="password" autocomplete="new-password" />
-        </label>
-      </div>
-      <div class="dialog-actions">
-        <button id="pw-save" class="primary">修改口令</button>
-      </div>
-      <div id="pw-error" class="error-bar" role="alert" hidden></div>
-      <div id="pw-ok" class="ok-bar" role="status" hidden></div>
+    <!-- ---- 管理账号密码：只读说明 ----
+         这里原本是「修改口令」表单。现在账号密码由 docker-compose.yml 唯一决定，
+         留在界面上只会让人以为还能改 —— 所以改成一句说明并把当前值指向下面的
+         「运行环境」表（那一份是真实生效值）。 -->
+    <div class="card">
+      <h3 class="card-title">管理账号密码</h3>
+      <p class="hint">
+        由部署配置唯一决定：<code>DISPATCH_ADMIN_USER</code> 与 <code>DISPATCH_ADMIN_PASSWORD</code>。
+        <b>不在界面修改，也不保存到数据库</b>（库里只有业务数据）。
+        改 <code>docker-compose.yml</code> 后重启容器生效；当前生效的用户名见下方「运行环境」。
+      </p>
     </div>
 
     <details id="env-box" class="env-box">

@@ -114,6 +114,44 @@ func TestHandshakeWrongPassword(t *testing.T) {
 	}
 }
 
+// 配了 DISPATCH_PUBLIC_USER 之后，握手登录框里的**用户名**也必须对得上。
+//
+// 这是「账号 + 密码」里「账号」唯一能真正起作用的地方：Bearer 与 Aria2 的
+// token 都只有一个值，没有用户名位置；只有真 BitComet 客户端的登录框有两个输入框。
+// 少了这条，compose 里填的账号就是个装饰。
+func TestHandshakeRejectsWrongUsername(t *testing.T) {
+	user, token := "ops", testToken
+	srv := newPublicServerWith(t, &user, &token)
+
+	code, body := post(t, srv.URL+"/api/webui/login", "application/json",
+		loginBody(t, testClientID, "admin", testToken), nil)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("用户名不对必须 401，实际 %d %s", code, body)
+	}
+	if strings.Contains(string(body), "invite_token") {
+		t.Fatalf("失败响应不得带 invite_token：%s", body)
+	}
+
+	code, body = post(t, srv.URL+"/api/webui/login", "application/json",
+		loginBody(t, testClientID, "ops", testToken), nil)
+	if code != http.StatusOK {
+		t.Fatalf("用户名与口令都对时应 200，实际 %d %s", code, body)
+	}
+}
+
+// 反向守卫：没配用户名时，登录框里填什么都该放行（只验口令）。
+// 否则「用户名可选」这个兼容承诺就是假的，老部署会全部登录失败。
+func TestHandshakeIgnoresUsernameWhenUnset(t *testing.T) {
+	token := testToken
+	srv := newPublicServer(t, &token)
+
+	code, body := post(t, srv.URL+"/api/webui/login", "application/json",
+		loginBody(t, testClientID, "随便填个名字", testToken), nil)
+	if code != http.StatusOK {
+		t.Fatalf("未配置用户名时应只验口令，实际 %d %s", code, body)
+	}
+}
+
 // `bypass:true` 必须被拒：我们从不实现免密码登录。
 func TestHandshakeRejectsBypass(t *testing.T) {
 	token := testToken
@@ -229,7 +267,7 @@ func TestHandshakeAuditHasNoSecrets(t *testing.T) {
 		t.Fatalf("打开真实库失败: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	ps := state.NewPublicState(st, ids.NowSecs(), &token, false, state.HandshakeState{
+	ps := state.NewPublicState(st, ids.NowSecs(), nil, &token, false, state.HandshakeState{
 		Tokens: handshake.NewStore(),
 	})
 	srv := httptest.NewServer(NewRouter(ps, "0.1.3"))

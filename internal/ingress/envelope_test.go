@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"reflect"
@@ -59,28 +60,92 @@ func TestTokenParamExtractionAndValidation(t *testing.T) {
 	}
 }
 
+// authHeader 造一个 `Authorization: <原始值>` 头。
+func authHeader(raw string) http.Header {
+	h := http.Header{}
+	if raw != "" {
+		h.Set("Authorization", raw)
+	}
+	return h
+}
+
+// bearerHeader 造 `Authorization: Bearer <v>`。
+func bearerHeader(v string) http.Header { return authHeader("Bearer " + v) }
+
+// basicHeader 造 `Authorization: Basic base64(<user>:<pass>)`。
+func basicHeader(user, pass string) http.Header {
+	return authHeader("Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass)))
+}
+
 func TestDecisionTableRows(t *testing.T) {
-	// Rust: decision_table_rows
-	configured := NewAuthPolicy(ptr("secret"))
-	unconfigured := NewAuthPolicy(nil)
+	// Rust: decision_table_rows（前 6 行逐字保留），后面是本轮新增的 Basic / 用户名行。
+	configured := NewAuthPolicy(nil, ptr("secret"))
+	withUser := NewAuthPolicy(ptr("ops"), ptr("secret"))
+	unconfigured := NewAuthPolicy(nil, nil)
 
 	cases := []struct {
 		name   string
 		policy AuthPolicy
-		bearer *string
+		header http.Header
 		device bool
 		want   Authz
 	}{
-		{"row1 device_token wins", configured, ptr("x"), true, AuthzAllow},
-		{"row2 public token matches", configured, ptr("secret"), false, AuthzAllow},
-		{"row3 public token mismatch", configured, ptr("wrong"), false, AuthzDeny},
-		{"row4 no bearer, configured", configured, nil, false, AuthzDeny},
-		{"row5 unconfigured, bearer", unconfigured, ptr("whatever"), false, AuthzAllow},
-		{"row6 unconfigured, no bearer", unconfigured, nil, false, AuthzAllow},
+		{"row1 device_token 最高优先", configured, bearerHeader("x"), true, AuthzAllow},
+		{"row2 Bearer 命中口令", configured, bearerHeader("secret"), false, AuthzAllow},
+		{"row3 Bearer 不匹配", configured, bearerHeader("wrong"), false, AuthzDeny},
+		{"row4 无任何凭据", configured, http.Header{}, false, AuthzDeny},
+		{"row5 未配置 + Bearer", unconfigured, bearerHeader("whatever"), false, AuthzAllow},
+		{"row6 未配置 + 空", unconfigured, http.Header{}, false, AuthzAllow},
+
+		// ── 本轮新增：Basic 与用户名 ─────────────────────────────────────
+		// 没配用户名 = 只验口令。这是老部署（只配过一个 token）的兼容路径：
+		// 强行要求用户名会把它们全部挡在门外。
+		{"Basic 未配用户名：只验口令", configured, basicHeader("随便填", "secret"), false, AuthzAllow},
+		{"Basic 口令错", configured, basicHeader("随便填", "wrong"), false, AuthzDeny},
+		// 配了用户名就必须两边都对 —— 否则 compose 里那个账号是装饰。
+		{"Basic 配了用户名：两边都对", withUser, basicHeader("ops", "secret"), false, AuthzAllow},
+		{"Basic 用户名错", withUser, basicHeader("admin", "secret"), false, AuthzDeny},
+		{"Basic 口令对用户名错", withUser, basicHeader("nobody", "secret"), false, AuthzDeny},
+		// Bearer 只有一个值，没有用户名位置 ⇒ 不参与用户名校验（向后兼容）。
+		{"Bearer 绕过用户名（兼容旧调用）", withUser, bearerHeader("secret"), false, AuthzAllow},
+		// 畸形 Basic 必须拒绝，而不是「解析失败就当没带凭据」放过去。
+		{"Basic 无冒号", configured, authHeader("Basic " + base64.StdEncoding.EncodeToString([]byte("nocolon"))), false, AuthzDeny},
+		{"Basic 非 base64", configured, authHeader("Basic !!!"), false, AuthzDeny},
+		{"Basic 空载荷", configured, authHeader("Basic "), false, AuthzDeny},
 	}
 	for _, tc := range cases {
-		if got := tc.policy.Decide(tc.bearer, tc.device); got != tc.want {
+		if got := tc.policy.Decide(tc.header, tc.device); got != tc.want {
 			t.Fatalf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// BasicOf 的边界：这是新增解析器，写错会表现为「配了用户名却怎么都登不上」。
+func TestBasicOfEdges(t *testing.T) {
+	cases := []struct {
+		name     string
+		raw      string
+		wantOK   bool
+		wantUser string
+		wantPass string
+	}{
+		{"正常", "Basic " + base64.StdEncoding.EncodeToString([]byte("ops:pw")), true, "ops", "pw"},
+		{"大小写不敏感", "basic " + base64.StdEncoding.EncodeToString([]byte("ops:pw")), true, "ops", "pw"},
+		{"口令里含冒号（首个冒号分界）", "Basic " + base64.StdEncoding.EncodeToString([]byte("ops:a:b")), true, "ops", "a:b"},
+		{"空口令", "Basic " + base64.StdEncoding.EncodeToString([]byte("ops:")), true, "ops", ""},
+		{"无冒号", "Basic " + base64.StdEncoding.EncodeToString([]byte("ops")), false, "", ""},
+		{"非 base64", "Basic ###", false, "", ""},
+		{"Bearer 不属于 Basic", "Bearer tok", false, "", ""},
+		{"只有 scheme", "Basic ", false, "", ""},
+		{"缺失", "", false, "", ""},
+	}
+	for _, tc := range cases {
+		u, p, ok := BasicOf(authHeader(tc.raw))
+		if ok != tc.wantOK {
+			t.Fatalf("%s: ok=%v, want %v", tc.name, ok, tc.wantOK)
+		}
+		if ok && (u != tc.wantUser || p != tc.wantPass) {
+			t.Fatalf("%s: got %q/%q, want %q/%q", tc.name, u, p, tc.wantUser, tc.wantPass)
 		}
 	}
 }
@@ -111,15 +176,20 @@ func TestIsOKCodeCaseInsensitive(t *testing.T) {
 
 // fakeState is a minimal PublicAuthState for exercising Authorize.
 type fakeState struct {
-	token   *string
+	user    *string
+	pass    *string
 	devices map[string]bool
 }
 
-func (f fakeState) PublicTokenConfigured() (string, bool) {
-	if f.token == nil {
-		return "", false
+func (f fakeState) PublicAuth() (string, string, bool) {
+	if f.pass == nil {
+		return "", "", false
 	}
-	return *f.token, true
+	u := ""
+	if f.user != nil {
+		u = *f.user
+	}
+	return u, *f.pass, true
 }
 
 func (f fakeState) IsDeviceToken(t string) bool { return f.devices[t] }
@@ -127,30 +197,42 @@ func (f fakeState) IsDeviceToken(t string) bool { return f.devices[t] }
 // Authorize is the real entry point every protected route uses. envelope.rs
 // doesn't unit-test it directly, so this pins its observable decisions.
 func TestAuthorizeWiring(t *testing.T) {
-	st := fakeState{token: ptr("secret"), devices: map[string]bool{"devtok": true}}
-	bearerHeader := func(v string) http.Header {
-		h := http.Header{}
-		h.Set("Authorization", v)
-		return h
-	}
+	st := fakeState{pass: ptr("secret"), devices: map[string]bool{"devtok": true}}
 
-	if Authorize(st, bearerHeader("Bearer devtok")) != AuthzAllow {
+	if Authorize(st, bearerHeader("devtok")) != AuthzAllow {
 		t.Fatal("device token should be allowed")
 	}
-	if Authorize(st, bearerHeader("Bearer secret")) != AuthzAllow {
+	if Authorize(st, bearerHeader("secret")) != AuthzAllow {
 		t.Fatal("matching public token should be allowed")
 	}
-	if Authorize(st, bearerHeader("Bearer nope")) != AuthzDeny {
+	if Authorize(st, bearerHeader("nope")) != AuthzDeny {
 		t.Fatal("wrong token should be denied")
 	}
 	if Authorize(st, http.Header{}) != AuthzDeny {
 		t.Fatal("no header with configured token should be denied")
 	}
 
-	// Unconfigured public token + no device store => allow anything.
+	// 未配用户名时 Basic 只验口令。
+	if Authorize(st, basicHeader("随便", "secret")) != AuthzAllow {
+		t.Fatal("Basic with correct password and no configured user should allow")
+	}
+
+	// 配了用户名：Authorize 必须把它从 state 里取出来参与判定。
+	withUser := fakeState{user: ptr("ops"), pass: ptr("secret")}
+	if Authorize(withUser, basicHeader("ops", "secret")) != AuthzAllow {
+		t.Fatal("Basic with matching user + password should allow")
+	}
+	if Authorize(withUser, basicHeader("admin", "secret")) != AuthzDeny {
+		t.Fatal("Basic with wrong user must be denied")
+	}
+
+	// Unconfigured public credentials + no device store => allow anything.
 	open := fakeState{}
 	if Authorize(open, http.Header{}) != AuthzAllow {
 		t.Fatal("unconfigured policy should allow")
+	}
+	if Authorize(open, basicHeader("u", "p")) != AuthzAllow {
+		t.Fatal("unconfigured policy should allow Basic too")
 	}
 }
 

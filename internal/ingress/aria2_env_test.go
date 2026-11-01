@@ -24,7 +24,7 @@ func newAriaEnv(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	tok := testToken
-	ps := state.NewPublicState(st, ids.NowSecs(), &tok, false, state.HandshakeState{
+	ps := state.NewPublicState(st, ids.NowSecs(), nil, &tok, false, state.HandshakeState{
 		Tokens: handshake.NewStore(),
 	})
 	srv := httptest.NewServer(NewRouter(ps, "0.1.3"))

@@ -109,21 +109,29 @@ services:
       # DISPATCH_WEB_DIR: /web
 
       # ================= 对外口（6800）=================
-      # ---------- 可选 token ----------
-      # 不设 = 6800 **完全不校验**（内网便利；设计 R9 / 02 §4.4 的默认）。
-      #        启动日志会打一条 warn 明确告诉你这一点，别以为是"没生效"。
-      # 设了之后两条协议面各自的表现：
-      #   · Aria2 面   ：params[0] 传 "token:<值>"，缺失/错误 → JSON-RPC error code -1
-      #   · BitComet 面：请求头 `Authorization: Bearer <值>`，缺失/错误 → HTTP 401 INVALID_TOKEN
-      # ⚠️ 它同时是下面那个代理自签握手的**口令判据**：设了它，客户端必须拿同一个值当
-      #    `password` 才能从 /api/webui/login 换到 invite_token —— 否则握手一律失败。
-      DISPATCH_PUBLIC_TOKEN: ${DISPATCH_PUBLIC_TOKEN:-}
+      # ---------- 账号密码 ----------
+      # 不设口令 = 6800 **完全不校验**（内网便利；设计 R9 / 02 §4.4 的默认）。
+      #            启动日志会打一条 warn 明确告诉你这一点，别以为是"没生效"。
+      #
+      # 设了口令之后，三种携带方式**共用同一个口令值**：
+      #   · Aria2 面   ：params[0] 传 "token:<口令>"，缺失/错误 → JSON-RPC error code -1
+      #   · BitComet 面：请求头 `Authorization: Bearer <口令>`，缺失/错误 → HTTP 401 INVALID_TOKEN
+      #   · 通用       ：请求头 `Authorization: Basic base64(用户名:口令)`
+      # 它同时是代理自签握手的**口令判据**：真 BitComet 客户端的登录框里，
+      # 密码填这个值；若也设了用户名，用户名必须与 DISPATCH_PUBLIC_USER 一致
+      # （否则握手一律失败）。
+      #
+      # 用户名是可选的：不设 = 只验口令（老部署只配过一个 token 的兼容路径）。
+      # 设了之后，Bearer / Aria2 token 这两种只有一个值的携带方式**不参与**用户名校验
+      # （协议里没有用户名位置），只有 Basic 与真客户端登录框才会比对。
+      DISPATCH_PUBLIC_USER: ${DISPATCH_PUBLIC_USER:-}
+      DISPATCH_PUBLIC_PASSWORD: ${DISPATCH_PUBLIC_PASSWORD:-}
 
       # ---------- 对外口是否回 CORS ----------
       # false（默认）= 不回 Access-Control-Allow-Origin ⇒ AriaNg 等**浏览器**客户端直连会被拦。
       # true         = 回 `Access-Control-Allow-Origin: *` 并处理 OPTIONS 预检。
-      # ⚠️ 开它就必须同时设 DISPATCH_PUBLIC_TOKEN：否则**任何你访问过的网页**都能跨源往这台
-      #    NAS 投递任务（drive-by）。启动时若检测到「开了 CORS 却没设 token」会打 warn。
+      # ⚠️ 开它就必须同时设 DISPATCH_PUBLIC_PASSWORD：否则**任何你访问过的网页**都能跨源往这台
+      #    NAS 投递任务（drive-by）。启动时若检测到「开了 CORS 却没设口令」会打 warn。
       # 更稳的做法：让 AriaNg 与网关**同源**（同一个反代 / 同站路径），压根不需要 CORS。
       DISPATCH_PUBLIC_CORS: ${DISPATCH_PUBLIC_CORS:-false}
 
