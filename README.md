@@ -591,7 +591,7 @@ IMAGE=liubangjian/download-gateway:sha-<短SHA> bash .github/scripts/smoke.sh
    但**注解是公开可读的**。所以脚本在成功时打一条 `::notice`，内容形如：
 
    ```
-   容器冒烟通过 断言=68 条全部通过 | 镜像=…/download-gateway:sha-<短SHA>
+   容器冒烟通过 断言=91 条全部通过 | 镜像=…/download-gateway:sha-<短SHA>
                 | digest=sha256:7c73…7c1a | 应用自报版本=0.1.N
    ```
 
