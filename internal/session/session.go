@@ -200,28 +200,72 @@ func CookieValue(h http.Header, key string) (string, bool) {
 //
 // 判定顺序：① `Sec-Fetch-Site`（浏览器自动带）；② `Origin` 与 `Host` 比对；
 // ③ 两者都无（多为 curl 等非浏览器客户端）⇒ 视为同源（浏览器必会带上前两者之一）。
-func SameOrigin(h http.Header) bool {
-	if v := h.Get("Sec-Fetch-Site"); v != "" {
+//
+// ⚠️ 这里有一处 **Go 与 Rust 的语义鸿沟**，照搬 Rust 写法会造成全员写操作失败：
+// Rust 侧（actix）用 `headers.get(HOST)` 取 Host，Host 确实在 HeaderMap 里；
+// 而 Go 的 `net/http` 会把 `Host` **从 Header map 里摘出来**放进 `Request.Host`，
+// 于是 `r.Header.Get("Host")` **恒为空字符串**。Rust 版本原样翻译过来，
+// 第二条分支就退化成「带了 Origin 且不带 Sec-Fetch-Site ⇒ 必定 false」，
+// 症状是节点增删改 / 策略保存 / 任务干预 / 改口令 **全部 403 "CSRF 校验失败"**，
+// 而登录与列表（只读）都正常 —— 极易被误判成"前端没带 token"。
+// 因此本函数签名收 `*http.Request`，Host 优先取 `r.Host`，Header 仅作兜底。
+//
+// `Sec-Fetch-Site: same-site` 不直接拒绝：它表示"同站不同源"，但浏览器对
+// 同 IP 不同端口等场景的归类并不总与 origin 完全一致。这里继续走 Origin/Host
+// **精确比对**，比一刀切更准确且不降低安全性（真正跨源的 Origin 仍然对不上）。
+func SameOrigin(r *http.Request) bool {
+	if v := r.Header.Get("Sec-Fetch-Site"); v != "" {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "same-origin", "none":
 			return true
-		case "cross-site", "same-site":
+		case "cross-site":
+			// 真跨站，无需再做比对。
 			return false
 		}
 	}
-	if origin := h.Get("Origin"); origin != "" {
-		origin = strings.TrimSpace(origin)
-		ohost := origin
-		if _, after, ok := strings.Cut(origin, "://"); ok {
-			ohost = after
-		}
-		host := h.Get("Host")
-		if host == "" {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		ohost := originHost(origin)
+		host := requestHost(r)
+		if ohost == "" || host == "" {
 			return false
 		}
-		return strings.EqualFold(ohost, strings.TrimSpace(host))
+		return strings.EqualFold(ohost, host)
 	}
 	return true
+}
+
+// originHost 从 `Origin` 头里取出 host[:port]。
+//
+// Origin 的规范形态是 `scheme://host[:port]`，但部分客户端/代理会带尾部 `/`，
+// 这里一并归一化，避免"就差一个斜杠"被判成跨源。
+func originHost(origin string) string {
+	origin = strings.TrimSpace(origin)
+	if _, after, ok := strings.Cut(origin, "://"); ok {
+		origin = after
+	}
+	// 去掉可能存在的路径/尾部斜杠（`Origin` 本不该有，但脏数据不该让它变成 403）。
+	if i := strings.IndexByte(origin, '/'); i >= 0 {
+		origin = origin[:i]
+	}
+	return strings.TrimSpace(origin)
+}
+
+// requestHost 取请求的 Host。
+//
+// `r.Host` 是 Go 的权威来源；`Header["Host"]` 只作兜底（某些中间件 /
+// HTTP/2 场景会把它留在 Header 里）。两者都空则视为无法判定。
+func requestHost(r *http.Request) string {
+	if h := strings.TrimSpace(r.Host); h != "" {
+		return h
+	}
+	if h := strings.TrimSpace(r.Header.Get("Host")); h != "" {
+		// 多值（极少见）取第一个，避免 `a, b` 与 Origin 比对永远失败。
+		if i := strings.IndexByte(h, ','); i >= 0 {
+			h = strings.TrimSpace(h[:i])
+		}
+		return h
+	}
+	return ""
 }
 
 // CookieSecureFor 依据策略与请求头，决定是否给 Cookie 加 `Secure`（对应 Rust `cookie_secure_for`）。

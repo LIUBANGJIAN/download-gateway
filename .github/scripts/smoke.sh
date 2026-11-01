@@ -301,7 +301,41 @@ fi
 resp="$(curl -s --max-time 10 -w '\n%{http_code}' -H 'Content-Type: application/json' \
   -d '{"password":"definitely-not-the-password"}' "${ADM}/api/admin/login")"
 code="$(printf '%s' "$resp" | tail -1)"
-expect "POST ${ADM}/api/admin/login（错误口令）" 401 "$code" "$(printf '%s' "$resp" | sed '$d')"
+body="$(printf '%s' "$resp" | sed '$d')"
+expect "POST ${ADM}/api/admin/login（错误口令）" 401 "$code" "$body"
+# 提示语必须统一成「用户名或口令错误」：分开说"用户不存在"/"口令错误"
+# 等于告诉攻击者哪一半猜对了。
+expect_contains "错误提示不得泄漏用户名是否存在" "$body" '用户名或口令错误'
+
+# 错误用户名 + 正确口令也必须被拒 —— 这一枪证明用户名是**真的参与校验**，
+# 而不是被静默忽略（那会让"改成非 admin 用户名"变成一个错觉）。
+# 注意：冒烟用的是默认用户名 admin，所以这里故意送一个别的。
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' -H 'Content-Type: application/json' \
+  -d "{\"username\":\"not-admin\",\"password\":\"${ADMIN_PW}\"}" "${ADM}/api/admin/login")"
+code="$(printf '%s' "$resp" | tail -1)"
+expect "POST ${ADM}/api/admin/login（错误用户名 + 正确口令）" 401 "$code" "$(printf '%s' "$resp" | sed '$d')"
+
+# 只带 Origin、**不带** Sec-Fetch-Site 的写请求必须放行。
+# 这条锁的是一次线上事故：Go 的 net/http 把 Host 从 Header 挪进 Request.Host，
+# 而移植时照抄了 Rust 的 `headers.get(HOST)` ⇒ `r.Header.Get("Host")` 恒空
+# ⇒ 所有写操作 403「CSRF 校验失败」，而登录与列表都正常。
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' -b "$COOKIE_JAR" \
+  -H 'Content-Type: application/json' \
+  -H "Origin: ${ADM}" \
+  -d '{"alias":"smoke-csrf","base_url":"http://203.0.113.77:9085",'\
+'"user":"admin","password":"x","weight":1,"max_concurrent":1,"max_rate_kbps":0,"role":"generic"}' \
+  "${ADM}/api/admin/nodes")"
+code="$(printf '%s' "$resp" | tail -1)"
+expect "POST ${ADM}/api/admin/nodes（只带 Origin，无 Sec-Fetch-Site）" 200 "$code" "$(printf '%s' "$resp" | sed '$d')"
+
+# 反过来：跨源 Origin 必须被拒（CSRF 防护不能为了放行 bug 而整体失效）。
+resp="$(curl -s --max-time 10 -w '\n%{http_code}' -b "$COOKIE_JAR" \
+  -H 'Content-Type: application/json' -H 'Origin: http://evil.example' \
+  -d '{"alias":"smoke-csrf2","base_url":"http://203.0.113.78:9085",'\
+'"user":"admin","password":"x","weight":1,"max_concurrent":1,"max_rate_kbps":0,"role":"generic"}' \
+  "${ADM}/api/admin/nodes")"
+code="$(printf '%s' "$resp" | tail -1)"
+expect "POST ${ADM}/api/admin/nodes（跨源 Origin）" 403 "$code" "$(printf '%s' "$resp" | sed '$d')"
 
 echo
 echo "── 7. 管理口 · 页面与静态资源 ──────────────────────────────────"
@@ -326,6 +360,22 @@ done
 expect_contains "首页横幅声明调度已启用" "$home" "调度与下发已启用"
 expect_absent "首页横幅不得再声称只受理任务" "$home" "仅受理任务"
 expect_absent "首页横幅不得再声称不会真正下载" "$home" "不会真正下载"
+# 横幅是**数据驱动**的：HTML 里那两句是默认态与 no-JS 兜底，app.js 拿到
+# summary.scheduler_enabled 后会按真实状态改写。所以两个状态各需一句真话 ——
+# 只留一句，关掉 DISPATCH_SCHEDULER 时横幅就在谎报「已启用」。
+js_asset="$(curl -s --max-time 10 "${ADM}/app.js")"
+expect_contains "横幅在调度关闭时另有真话（app.js）" "$js_asset" "调度已关闭"
+expect_contains "横幅启用态文案也在 app.js 里（两条都在才叫能区分）" "$js_asset" "调度与下发已启用"
+
+# 本轮 UI 重做的几个「有没有真的发出去」证据。
+# 只查类名/id 而不查外观：外观没法用 curl 断言，但「元素存在」能挡住
+# 「改了源码忘了重新 embed / 镜像没重建」这类最常见的假绿。
+css_asset="$(curl -s --max-time 10 "${ADM}/app.css")"
+expect_contains "首页有全局提示容器" "$home" 'id="toast"'
+expect_contains "节点页有筛选框" "$home" 'id="node-search"'
+expect_contains "表头带 scope（读屏软件靠它认列）" "$home" 'scope="col"'
+expect_contains "样式里有进度条" "$css_asset" ".prog-bar"
+expect_contains "样式里有键盘焦点可见规则" "$css_asset" "focus-visible"
 # 导航里**不得**出现「新增任务」按钮（产品原则，见 README「职责边界」）。
 # ⚠️ 这里刻意**不**断言「不能出现『添加任务』四个字」：任务页的说明文字里
 #    恰好有一句「管理台**不提供**添加任务」—— 按字面禁词写，会把**正确的文案**判成违规。

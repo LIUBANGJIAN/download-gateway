@@ -137,9 +137,10 @@ func NewAdminState(
 	secrets *secret.SecretBox,
 	webDir *string,
 ) *AdminState {
-	var initialPlain string
+	var initialPlain, initialUser string
 	if policy != nil {
 		initialPlain = policy.Password
+		initialUser = policy.User
 	}
 	return &AdminState{
 		Store:     store,
@@ -152,6 +153,7 @@ func NewAdminState(
 		WebDir:    webDir,
 		// 初始凭据 = 环境变量注入或启动时随机生成的口令（明文，只在内存里）。
 		// 启动时若库里已有用户自设的哈希，由调用方随后 `Credential.SetHash()` 覆盖。
-		Credential: adminpass.NewCredential(initialPlain),
+		// 用户名同样来自环境（`DISPATCH_ADMIN_USER`，默认 admin）。
+		Credential: adminpass.NewCredential(initialPlain).WithUser(initialUser),
 	}
 }

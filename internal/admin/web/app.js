@@ -34,6 +34,7 @@ const PATHS = {
 const state = {
   view: 'overview',
   nodes: [],
+  nodeFilter: '',
   policies: [],
   events: [],          // 已加载的告警行（追加上去，不覆盖）
   eventsCursor: 0,     // 下一页游标；0 = 没有更多
@@ -74,21 +75,63 @@ function escapeHtml(s) {
 
 const fmtTime = (secs) => (secs ? new Date(secs * 1000).toLocaleString() : '—');
 
+// 运行时长按人读的单位显示。原来直接拼 `${n}s`，跑三天会看到「259200s」。
+function fmtUptime(secs) {
+  const n = Number(secs);
+  if (!Number.isFinite(n) || n < 0) return '—';
+  const d = Math.floor(n / 86400);
+  const h = Math.floor((n % 86400) / 3600);
+  const m = Math.floor((n % 3600) / 60);
+  const s = Math.floor(n % 60);
+  const parts = [];
+  if (d) parts.push(`${d} 天`);
+  if (h) parts.push(`${h} 小时`);
+  if (m) parts.push(`${m} 分`);
+  if (!d && !h) parts.push(`${s} 秒`);
+  return parts.join(' ');
+}
+
 function showErr(id, msg) {
   const el = $(id);
   if (!el) return;
   if (msg) { el.textContent = msg; el.hidden = false; } else { el.hidden = true; }
 }
 
+// ── 全局轻提示 ──────────────────────────────────────────────────────────────
+// 用于「操作成功但不需要人读长文」的场合（切开关、暂停任务）。
+// 失败仍然走页面内的 error-bar —— 错误要留在原地，不能被 3 秒后消失的 toast 吞掉。
+let toastTimer = null;
+
+function toast(msg, tone = 'ok') {
+  const el = $('toast');
+  el.textContent = msg;
+  el.dataset.tone = tone;
+  el.hidden = false;
+  // 先移除再加：连续两次同向提示时，浏览器会认为样式没变而不重播过渡。
+  el.classList.remove('show');
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.classList.remove('show');
+    toastTimer = setTimeout(() => { el.hidden = true; }, 200);
+  }, 2600);
+}
+
 // ── 视图切换 ────────────────────────────────────────────────────────────────
 function show(view) {
   state.view = view;
+  // 给 CSS 一个「当前在哪」的钩子：登录页要藏掉导航（见 app.css 的 body[data-view="login"]）
+  document.body.dataset.view = view;
   for (const name of ['login', 'overview', 'nodes', 'tasks', 'events', 'settings']) {
     $(`view-${name}`).hidden = name !== view;
   }
   $('banner').hidden = view === 'login';
   document.querySelectorAll('.nav-btn[data-view]').forEach((b) => {
-    b.classList.toggle('active', b.dataset.view === view);
+    const on = b.dataset.view === view;
+    b.classList.toggle('active', on);
+    // aria-current 让读屏软件知道「你在哪一页」，纯视觉的 .active 传达不了
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
   if (PATHS[view] && location.pathname !== PATHS[view]) {
     history.pushState({ view }, '', PATHS[view]);
@@ -98,28 +141,53 @@ function show(view) {
   if (view === 'tasks') loadTasks();
   if (view === 'events') loadEvents(true);
   if (view === 'settings') { loadPolicies(); loadPasswordStatus(); }
+  syncAutoRefresh();
 }
 
 // ═════════════════════════════ 总览 ═════════════════════════════
+
+// 横幅文案必须跟着真实状态走。
+// 写死「已启用」在 DISPATCH_SCHEDULER=off 时就是撒谎：用户以为任务在跑，
+// 实际全在排队。反过来写死「未启用」则是自贬。所以两句话都要有，由数据选。
+function renderBanner(schedulerOn) {
+  const t = $('banner-text');
+  const b = $('banner');
+  if (schedulerOn) {
+    b.dataset.tone = 'info';
+    t.textContent = '调度与下发已启用：任务会自动选点、投递到 BitComet 节点，进度每 15 秒回读。'
+      + '节点需为「在线」才会被选中（新节点请在「节点」页点一次探测）。';
+  } else {
+    b.dataset.tone = 'warn';
+    t.textContent = '调度已关闭：新任务只会排队，不会自动投递到任何节点。'
+      + '打开方式：去掉 DISPATCH_SCHEDULER=off 重启，或到「设置」把 app_config.scheduler.enabled 置为 on。';
+  }
+}
+
 async function loadOverview() {
   const grid = $('overview-grid');
   showErr('overview-error', null);
   try {
     const data = await api('/api/admin/summary');
+    renderBanner(!!data.scheduler_enabled);
     const nodeCount = Array.isArray(data.nodes) ? data.nodes.length : '—';
-    grid.innerHTML = [
+    const cells = [
       ['版本', data.version],
-      ['运行时长', `${data.uptime_seconds}s`],
+      ['运行时长', fmtUptime(data.uptime_seconds)],
       ['任务总数', data.task_total],
       ['节点数', nodeCount],
-      ['对外口', data.ports.public],
-      ['管理口', data.ports.admin],
+      ['对外口', data.ports && data.ports.public],
+      ['管理口', data.ports && data.ports.admin],
       ['数据库', data.db_path],
       ['调度内核', data.scheduler_enabled ? '已启用' : '未启用（任务只排队）'],
-    ].map(([k, v]) => `<div class="card"><div class="muted">${escapeHtml(k)}</div><div>${escapeHtml(v)}</div></div>`).join('');
+    ];
+    grid.innerHTML = cells.map(([k, v]) => (
+      `<div class="card"><div class="k">${escapeHtml(k)}</div>`
+      + `<div class="v">${escapeHtml(v == null || v === '' ? '—' : v)}</div></div>`
+    )).join('');
     const counts = data.task_counts || [];
     $('overview-counts').innerHTML = counts.length
-      ? counts.map((c) => `<span class="badge">${escapeHtml(c.state)}: ${escapeHtml(c.count)}</span>`).join('')
+      ? counts.map((c) => `<span class="badge" data-state="${escapeHtml(c.state)}">`
+        + `${escapeHtml(c.state)}: ${escapeHtml(c.count)}</span>`).join('')
       : '<span class="badge">无任务</span>';
   } catch (e) {
     showErr('overview-error', `加载总览失败：${e.message}`);
@@ -140,19 +208,37 @@ async function loadNodes() {
   }
 }
 
+// onlineCell 显示节点的**调度可用性**，而不是"端口通不通"。
+//
+// 三态的原因：`state` 由调度内核给出（走完整登录 + about 调用），
+// `reachable` 只是内联探活看到的端口响应。两者不一致时最该说清楚的是
+// "能连上但用不了"—— 那种节点以前显示绿色"在线"，用户会一直等一个
+// 永远不会被派发的任务。
 function onlineCell(n) {
-  if (n.online) {
-    const code = n.http_code ? ` · HTTP ${n.http_code}` : '';
-    const ms = n.latency_ms != null ? ` · ${n.latency_ms}ms` : '';
-    return `<span class="dot dot-on"></span>在线${escapeHtml(code + ms)}`;
-  }
+  const lat = n.latency_ms != null ? ` · ${n.latency_ms}ms` : '';
   const why = n.probe_error ? `（${escapeHtml(n.probe_error)}）` : '';
+  if (n.state === 'online') {
+    return `<span class="dot dot-on"></span>在线${escapeHtml(lat)}`;
+  }
+  if (n.state === 'degraded') {
+    return `<span class="dot dot-warn"></span>可用性异常${why}`;
+  }
+  if (n.reachable) {
+    return `<span class="dot dot-warn"></span>可达但不可用${why}`;
+  }
   return `<span class="dot dot-off"></span>离线${why}`;
 }
 
+const NODE_ROLE_LABEL = { generic: '通用', series: '剧集', netdisk: '网盘' };
+
 function renderNodes() {
   const rows = $('node-rows');
-  rows.innerHTML = state.nodes.map((n) => {
+  const kw = state.nodeFilter.trim().toLowerCase();
+  const items = kw
+    ? state.nodes.filter((n) => `${n.alias} ${n.base_url}`.toLowerCase().includes(kw))
+    : state.nodes;
+
+  rows.innerHTML = items.map((n) => {
     const revealed = state.revealed.has(n.node_id);
     const pwCell = n.password_set
       ? (revealed
@@ -160,7 +246,9 @@ function renderNodes() {
         : '<span class="muted">••••••</span>')
       : '<span class="muted">未设置</span>';
     const pwBtn = n.password_set
-      ? `<button class="icon-btn" data-act="eye" data-id="${n.node_id}" title="${revealed ? '隐藏密码' : '显示密码'}">
+      ? `<button class="icon-btn" data-act="eye" data-id="${n.node_id}"
+                 title="${revealed ? '隐藏密码' : '显示密码'}"
+                 aria-label="${revealed ? '隐藏密码' : '显示密码'}">
            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
              <path d="M1.5 12s4-7 10.5-7 10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12Z"
                    fill="none" stroke="currentColor" stroke-width="1.6" />
@@ -169,16 +257,22 @@ function renderNodes() {
          </button>`
       : '';
     const rate = n.max_rate_kbps > 0 ? `${n.max_rate_kbps} KB/s` : '不限';
+    const role = NODE_ROLE_LABEL[n.role] || n.role;
     return `<tr>
-      <td>${escapeHtml(n.alias)}</td>
+      <td>
+        ${escapeHtml(n.alias)}
+        <span class="role-tag" title="角色：${escapeHtml(n.role)}">${escapeHtml(role)}</span>
+      </td>
       <td class="mono">${escapeHtml(n.base_url)}</td>
       <td class="nowrap">${onlineCell(n)}</td>
       <td>${escapeHtml(n.user)}</td>
       <td class="nowrap">${pwCell} ${pwBtn}</td>
-      <td>${escapeHtml(n.role)}</td>
-      <td>${escapeHtml(n.weight)}</td>
-      <td>${escapeHtml(n.max_concurrent)}</td>
-      <td class="nowrap">${escapeHtml(rate)}</td>
+      <td>
+        <div class="stack">
+          <span>权重 ${escapeHtml(n.weight)}</span>
+          <span class="sub">并发 ${escapeHtml(n.max_concurrent)} · 限速 ${escapeHtml(rate)}</span>
+        </div>
+      </td>
       <td class="nowrap">
         <label class="switch" title="调度开关：只影响是否派发新任务，不影响节点上正在运行的程序">
           <input type="checkbox" data-act="toggle" data-id="${n.node_id}" ${n.enabled ? 'checked' : ''} />
@@ -186,12 +280,17 @@ function renderNodes() {
         </label>
       </td>
       <td class="nowrap">
-        <button data-act="edit" data-id="${n.node_id}">编辑</button>
-        <button data-act="del" data-id="${n.node_id}" class="danger">删除</button>
+        <button class="sm" data-act="edit" data-id="${n.node_id}">编辑</button>
+        <button class="sm danger" data-act="del" data-id="${n.node_id}">删除</button>
       </td>
     </tr>`;
   }).join('');
-  $('node-empty').hidden = state.nodes.length > 0;
+
+  // 空状态要区分「一台都没有」和「筛选没命中」—— 两者该说的话不一样
+  const empty = $('node-empty');
+  empty.hidden = items.length > 0;
+  if (!items.length && kw) empty.textContent = `没有匹配「${state.nodeFilter.trim()}」的节点。`;
+  else empty.textContent = '暂无节点。点右上角「新增节点」把第一台下载机接进来。';
 }
 
 async function revealPassword(id) {
@@ -211,6 +310,7 @@ async function toggleNode(id, enabled) {
   showErr('node-error', null);
   try {
     await api(`/api/admin/nodes/${id}/enabled`, { method: 'POST', body: { enabled } });
+    toast(enabled ? '已纳入调度' : '已停止向该节点派发新任务');
     loadNodes();
   } catch (e) {
     showErr('node-error', `切换调度开关失败：${e.message}`);
@@ -259,6 +359,8 @@ async function submitNodeForm(ev) {
   // 编辑时密码留空 = 不改动，因此**不把空串发上去**（后端虽也做了兜底，但两层都做更稳）。
   if (!isEdit || pw !== '') body.password = pw;
 
+  const btn = $('node-form').querySelector('button[type="submit"]');
+  btn.disabled = true;
   try {
     if (isEdit) {
       await api(`/api/admin/nodes/${state.editingNodeId}`, { method: 'PUT', body });
@@ -266,9 +368,12 @@ async function submitNodeForm(ev) {
       await api('/api/admin/nodes', { method: 'POST', body });
     }
     $('node-dialog').close();
+    toast(isEdit ? '节点已保存' : '节点已添加');
     loadNodes();
   } catch (e) {
     showErr('node-form-error', `保存失败：${e.message}`);
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -296,6 +401,7 @@ async function submitNodeDelete(ev) {
     await api(`/api/admin/nodes/${pendingDeleteNode}`, { method: 'DELETE' });
     $('nodedel-dialog').close();
     pendingDeleteNode = null;
+    toast('节点已删除');
     loadNodes();
   } catch (e) {
     showErr('nodedel-error', `删除失败：${e.message}`);
@@ -311,16 +417,16 @@ async function loadTasks() {
     const items = data.items || [];
     $('task-rows').innerHTML = items.map((t) => `
       <tr>
-        <td class="nowrap"><span class="badge">${escapeHtml(t.internal_state)}</span></td>
+        <td class="nowrap"><span class="badge" data-state="${escapeHtml(t.internal_state)}">${escapeHtml(t.internal_state)}</span></td>
         <td>${escapeHtml(t.name)}</td>
         <td>${escapeHtml(t.kind)}</td>
-        <td>${escapeHtml(t.permillage)}‰</td>
-        <td class="nowrap">${escapeHtml(fmtTime(t.created_at))}</td>
+        ${progressCell(t)}
+        <td class="nowrap muted">${escapeHtml(fmtTime(t.created_at))}</td>
         <td class="nowrap">
-          <button data-act="pause" data-id="${escapeHtml(t.task_id)}">暂停</button>
-          <button data-act="unpause" data-id="${escapeHtml(t.task_id)}">恢复</button>
-          <button data-act="retry" data-id="${escapeHtml(t.task_id)}">重试</button>
-          <button data-act="del" data-id="${escapeHtml(t.task_id)}" class="danger">删除</button>
+          <button class="sm" data-act="pause" data-id="${escapeHtml(t.task_id)}">暂停</button>
+          <button class="sm" data-act="unpause" data-id="${escapeHtml(t.task_id)}">恢复</button>
+          <button class="sm" data-act="retry" data-id="${escapeHtml(t.task_id)}">重试</button>
+          <button class="sm danger" data-act="del" data-id="${escapeHtml(t.task_id)}">删除</button>
         </td>
       </tr>`).join('');
     $('task-empty').hidden = items.length > 0;
@@ -329,10 +435,32 @@ async function loadTasks() {
   }
 }
 
+// 进度条：网关只给 `permillage`（0–1000），原来直接显示「400‰」——
+// 千分号对人不友好，且看不出还剩多少。这里换成百分比 + 条。
+// 宽度来自 Number() 计算后的数值，不含任何用户输入，直接进 style 安全。
+function progressCell(t) {
+  const pm = Number(t.permillage);
+  const permille = Number.isFinite(pm) ? Math.min(1000, Math.max(0, pm)) : 0;
+  const pct = permille / 10;
+  const st = String(t.internal_state || '');
+  const cls = st === 'completed' ? ' done' : (st === 'failed' || st === 'error' ? ' failed' : '');
+  return `<td>
+    <div class="prog-cell" title="${permille}‰">
+      <div class="prog" role="progressbar" aria-valuenow="${pct.toFixed(1)}"
+           aria-valuemin="0" aria-valuemax="100" aria-label="下载进度">
+        <div class="prog-bar${cls}" style="width:${pct.toFixed(1)}%"></div>
+      </div>
+      <span class="prog-num">${pct.toFixed(1)}%</span>
+    </div>
+  </td>`;
+}
+
 async function actOnTask(id, action) {
   showErr('task-error', null);
   try {
     await api(`/api/admin/tasks/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: {} });
+    const label = { pause: '已暂停', unpause: '已恢复', retry: '已重新入队' }[action] || '已完成';
+    toast(label);
     loadTasks();
   } catch (e) {
     showErr('task-error', `操作失败：${e.message}`);
@@ -358,9 +486,22 @@ async function submitTaskDelete(ev) {
     });
     $('taskdel-dialog').close();
     state.pendingTask = null;
+    toast('任务已删除');
     loadTasks();
   } catch (e) {
     showErr('taskdel-error', `删除失败：${e.message}`);
+  }
+}
+
+// 自动刷新：只盯进度时才有意义，因此只在「任务」页且勾选时跑。
+// 离开页面必须停表 —— 否则后台每 5 秒打一次接口，白烧 CPU 还刷日志。
+let autoTimer = null;
+
+function syncAutoRefresh() {
+  const on = $('task-auto').checked && state.view === 'tasks';
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  if (on) {
+    autoTimer = setInterval(() => { if (state.view === 'tasks') loadTasks(); }, 5000);
   }
 }
 
@@ -395,15 +536,18 @@ async function loadEvents(reset) {
 
 function renderEvents() {
   const idOrDash = (v) => (v == null ? '—' : escapeHtml(v));
-  $('event-rows').innerHTML = state.events.map((e) => `<tr>
+  $('event-rows').innerHTML = state.events.map((e) => {
+    const detail = e.detail || '';
+    return `<tr>
       <td class="nowrap muted">${escapeHtml(fmtTime(e.created_at))}</td>
       <td class="nowrap"><span class="lvl lvl-${escapeHtml(e.level)}">${escapeHtml(EVENT_LEVEL_LABEL[e.level] || e.level)}</span></td>
       <td class="nowrap">${escapeHtml(e.category)}</td>
       <td class="nowrap">${idOrDash(e.node_id)}</td>
       <td class="nowrap mono">${idOrDash(e.task_id)}</td>
       <td>${escapeHtml(e.message)}</td>
-      <td class="mono muted">${escapeHtml(e.detail || '')}</td>
-    </tr>`).join('');
+      <td class="mono detail-cell" title="${escapeHtml(detail)}">${escapeHtml(detail)}</td>
+    </tr>`;
+  }).join('');
   $('event-empty').hidden = state.events.length > 0;
   // 游标为 0 = 服务端已无更早的行。这时隐藏按钮，而不是留着让人点出空结果。
   $('event-more-box').hidden = !state.eventsCursor;
@@ -420,10 +564,12 @@ async function loadPolicies() {
     // 逐条统计而不是写死数字：策略增删后这里不会变成假话。
     const total = state.policies.length;
     const eff = state.policies.filter((p) => p.effective).length;
+    // 以前这里写「全部已接入调度内核 —— 全部接入调度内核 ——」（前缀和后缀重复了一遍），
+    // 读起来像结巴。前后两段各说一件事：先给比例，再说「保存后什么时候生效」。
     const tail = total === eff
-      ? '全部已接入调度内核 —— 保存后下一个调度周期（约 1 秒）即按新值选点，不需要重启。'
+      ? '保存后下一个调度周期（约 1 秒）即按新值选点，不需要重启。'
       : `其余 ${total - eff} 条暂未生效，鼠标悬停行末「未生效」可看具体原因。`;
-    $('policy-note').textContent = total ? `${eff} / ${total} 条已接入调度内核 —— ${tail}` : '';
+    $('policy-note').textContent = total ? `${eff} / ${total} 条已接入调度内核。${tail}` : '';
     renderPolicyTable();
     renderEnv(data.env || []);
   } catch (e) {
@@ -515,13 +661,20 @@ function readPolicyForm() {
 async function savePolicies() {
   showErr('policy-error', null);
   hideOk('policy-ok');
+  const btn = $('policy-save');
+  btn.disabled = true;
   try {
     const data = await api('/api/admin/config', { method: 'PUT', body: readPolicyForm() });
     state.policies = data.policies || [];
     renderPolicyTable();
-    ok('policy-ok', '已保存。注意：策略要等调度内核落地后才会真正影响派发。');
+    // 之前这里写的是「策略要等调度内核落地后才会真正影响派发」——
+    // 调度内核早在 B1 就落地了，那句话会让人以为保存无效。
+    ok('policy-ok', '已保存并立即生效：下一个调度周期（约 1 秒）就会按新优先级选点，不需要重启。');
+    loadPolicies();
   } catch (e) {
     showErr('policy-error', `保存失败：${e.message}`);
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -578,12 +731,23 @@ function hideOk(id) { $(id).hidden = true; }
 async function doLogin(ev) {
   ev.preventDefault();
   showErr('login-error', null);
+  const btn = $('login-form').querySelector('button[type="submit"]');
+  btn.disabled = true;
   try {
-    await api('/api/admin/login', { method: 'POST', body: { password: $('login-password').value } });
+    await api('/api/admin/login', {
+      method: 'POST',
+      body: {
+        username: $('login-username').value.trim(),
+        password: $('login-password').value,
+      },
+    });
     $('login-password').value = '';
     show('overview');
   } catch (e) {
     showErr('login-error', e.message);
+    $('login-password').select();
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -624,13 +788,22 @@ function init() {
   });
   window.addEventListener('popstate', () => show(VIEWS[location.pathname] || 'overview'));
 
+  $('banner-close').addEventListener('click', () => { $('banner').hidden = true; });
+
   $('logout-btn').addEventListener('click', doLogout);
   $('login-form').addEventListener('submit', doLogin);
   $('reset-request-btn').addEventListener('click', requestTempPassword);
 
+  // 总览
+  $('overview-refresh').addEventListener('click', loadOverview);
+
   // 节点
   $('node-refresh').addEventListener('click', loadNodes);
   $('node-new').addEventListener('click', () => openNodeDialog(null));
+  $('node-search').addEventListener('input', () => {
+    state.nodeFilter = $('node-search').value;
+    renderNodes();
+  });
   $('node-form').addEventListener('submit', submitNodeForm);
   $('nf-cancel').addEventListener('click', () => $('node-dialog').close());
   $('nodedel-form').addEventListener('submit', submitNodeDelete);
@@ -663,6 +836,7 @@ function init() {
   // 任务
   $('task-refresh').addEventListener('click', loadTasks);
   $('task-search').addEventListener('input', loadTasks);
+  $('task-auto').addEventListener('change', syncAutoRefresh);
   $('task-rows').addEventListener('click', (ev) => {
     const btn = ev.target.closest('button[data-act]');
     if (!btn) return;
@@ -684,9 +858,21 @@ function init() {
   $('pw-save').addEventListener('click', savePassword);
 
   // 启动：先探测会话（summary），成功则进入目标页，否则回登录。
+  // 顺手用这次的 summary 把横幅写实 —— 否则直接打开 /nodes 时横幅会一直停在
+  // 「正在读取调度状态…」（loadOverview 根本不会跑）。
+  //
+  // 目标页本身就是 /login 时不做探测：那一页的含义就是"我要登录"，
+  // 探测只会换来一个 401 和一条控制台红字。
   const start = VIEWS[location.pathname] || 'overview';
+  if (start === 'login') {
+    show('login');
+    return;
+  }
   api('/api/admin/summary')
-    .then(() => show(start === 'login' ? 'overview' : start))
+    .then((d) => {
+      if (d) renderBanner(!!d.scheduler_enabled);
+      show(start);
+    })
     .catch(() => show('login'));
 }
 

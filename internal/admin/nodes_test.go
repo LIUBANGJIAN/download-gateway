@@ -151,17 +151,25 @@ func TestNodeViewNeverLeaksCiphertext(t *testing.T) {
 	code := 401
 	p := probeResult{online: true, httpCode: &code, latencyMs: 12}
 	v2 := row.toView(&p)
-	if v2.State != "online" || !v2.Online {
-		t.Fatalf("有探测结果时以探测为准，实际 %q/%v", v2.State, v2.Online)
+	// 内联探活只补「可达性」，**不再覆盖** State。
+	//
+	// 这条断言曾经反过来写（探测 online ⇒ State=online），代价是 `degraded`
+	// 被抹成 `online`：管理台显示绿色"在线"，调度器却因为 C2 不选它，
+	// 用户看着一台"在线"的机器纳闷为什么任务一直排队。
+	if !v2.Reachable {
+		t.Fatal("端口通了 reachable 应为 true")
+	}
+	if v2.State != "unknown" || v2.Online {
+		t.Fatalf("可达不等于可调度：State 应保留库内值 unknown，实际 %q/%v", v2.State, v2.Online)
 	}
 	if v2.HTTPCode == nil || *v2.HTTPCode != 401 {
-		t.Fatal("BitComet 未认证返 401 也算在线")
+		t.Fatal("BitComet 未认证返 401 也要如实记录 http_code")
 	}
 
 	off := probeResult{online: false, latencyMs: 1500, errMsg: "超时（>1500ms）"}
 	v3 := row.toView(&off)
-	if v3.State != "offline" || v3.Online {
-		t.Fatalf("离线应为 offline/false，实际 %q/%v", v3.State, v3.Online)
+	if v3.Reachable {
+		t.Fatal("端口不通 reachable 应为 false")
 	}
 	if v3.ProbeError == nil {
 		t.Fatal("离线时应带 probe_error")

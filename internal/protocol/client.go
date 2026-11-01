@@ -416,3 +416,38 @@ func (c *Client) NewTaskConfig(ctx context.Context, taskType string) (map[string
 	}
 	return c.Call(ctx, "/api/config/new_task/get", map[string]any{"task_type": taskType})
 }
+
+// DefaultSaveFolder 返回节点上可用的下载目录（`new_task/get` 的 `save_folders[0].path`）。
+//
+// # 为什么必须现问节点，不能写死一个路径
+//
+// BitComet **2.22+ 的 `/api/task/http/add` 要求显式 `save_folder`**：不传直接
+// 返回 `FATAL_ERROR: save_folder missing`，任务根本建不起来。而可用目录因机器而异
+// （实测三台群晖都是 `/volume1/BitComet/Downloads`，Windows 节点则是
+// `D:\Downloads` 之类），跨平台无法猜。节点自己会通过 `new_task/get` 报出
+// `save_folders` 列表，这是唯一可靠来源。
+//
+// 返回 `ok=false` 表示节点没给出可用目录 —— 旧版 BitComet 不返回这个字段，
+// 此时调用方应保持"不传 `save_folder`"的旧行为（旧版不要求它）。
+func (c *Client) DefaultSaveFolder(ctx context.Context, taskType string) (string, bool, error) {
+	if taskType == "" {
+		taskType = "http"
+	}
+	cfg, err := c.NewTaskConfig(ctx, taskType)
+	if err != nil {
+		return "", false, err
+	}
+	raw, ok := cfg["save_folders"].([]any)
+	if !ok || len(raw) == 0 {
+		return "", false, nil
+	}
+	first, ok := raw[0].(map[string]any)
+	if !ok {
+		return "", false, nil
+	}
+	p, _ := first["path"].(string)
+	if p = strings.TrimSpace(p); p == "" {
+		return "", false, nil
+	}
+	return p, true, nil
+}

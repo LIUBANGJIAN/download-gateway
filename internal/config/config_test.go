@@ -195,6 +195,7 @@ func snap() EnvSnapshot {
 		LogLevel:                "info",
 		StateDir:                strPtr("/data"),
 		WebDir:                  nil,
+		AdminUser:               "admin",
 		AdminPasswordConfigured: true,
 		PublicTokenConfigured:   true,
 		AllowFileDelete:         false,
@@ -249,6 +250,7 @@ func TestItemsContentAndOrder(t *testing.T) {
 		{EnvLog, "info"},
 		{EnvStateDir, "/data"},
 		{EnvWebDir, "(内嵌)"}, // WebDir=nil ⇒ 内嵌
+		{EnvAdminUser, "admin"},
 		{EnvAdminPassword, "****"},
 		{EnvPublicToken, "****"},
 		{EnvAllowFileDelete, "false"},
@@ -282,6 +284,38 @@ func TestItemsStateDirDefaultPlaceholder(t *testing.T) {
 	byKey := indexItems(e.Items())
 	if got := byKey[EnvStateDir].Value; got != "(默认)" {
 		t.Fatalf("StateDir=nil 应展示 (默认)，实际 %q", got)
+	}
+}
+
+// 用户名必须在快照里出现，且**不许**被掩码。
+//
+// 两件事分别会被两种错误做法破坏：
+//   - 漏掉这一项 ⇒ 用户改错变量名（比如写成 DISPATCH_ADMIN_USERNAME）时，
+//     「运行环境」表里既看不到正确键、也看不到自己的键，只能干猜；
+//   - 顺手把它当敏感项 ⇒ 页面显示 `****`，等于没显示。
+func TestItemsAdminUserVisibleAndNotMasked(t *testing.T) {
+	e := snap()
+	e.AdminUser = "ops"
+	byKey := indexItems(e.Items())
+	it, ok := byKey[EnvAdminUser]
+	if !ok {
+		t.Fatalf("配置项里必须有 %s —— 它是可配置的登录用户名", EnvAdminUser)
+	}
+	if it.Value != "ops" {
+		t.Fatalf("%s 应展示真实用户名 ops（用户名不是秘密），实际 %q", EnvAdminUser, it.Value)
+	}
+	if isSensitive(EnvAdminUser) {
+		t.Fatalf("%s 不得被判成敏感键 —— 那会让这一行永远显示 ****", EnvAdminUser)
+	}
+}
+
+// 空值回落 admin：界面上得能看出「现在到底认哪个用户名」，
+// 写 `(默认)` 反而看不出来。
+func TestItemsAdminUserEmptyFallsBackToDefault(t *testing.T) {
+	e := snap()
+	e.AdminUser = ""
+	if got := indexItems(e.Items())[EnvAdminUser].Value; got != DefaultAdminUser {
+		t.Fatalf("AdminUser 为空时应回落 %q，实际 %q", DefaultAdminUser, got)
 	}
 }
 

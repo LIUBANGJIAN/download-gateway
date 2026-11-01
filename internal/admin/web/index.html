@@ -3,40 +3,55 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0f1115" />
   <title>下载网关 · 管理台</title>
+  <!-- 内联 SVG 图标：省一个 404，也让标签页不至于顶着浏览器的默认空白图标 -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233b82f6'/%3E%3Cpath d='M16 8v11m0 0-4.5-4.5M16 19l4.5-4.5M9 23h14' stroke='%23fff' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/app.css" />
 </head>
-<body>
-  <!-- 启动横幅：如实告知调度状态。B1 已落地，横幅改为「已启用」的说法；
-       若被 DISPATCH_SCHEDULER=off 关掉，总览页的 env 快照会显示出来。 -->
-  <div id="banner" class="banner" role="status">
-    调度与下发已启用（B1）：任务会自动选点、投递到 BitComet 节点，进度每 15 秒回读。
-    节点需为「在线」才会被选中（新节点请在「节点」页点一次探测）。
+<!-- data-view 初值给 login：首帧还没跑 JS，先按"未认证"渲染，
+     免得登录页闪一下导航（点了只会 401）。JS 起来后会立刻改成真实视图。 -->
+<body data-view="login">
+  <!-- 启动横幅：如实告知调度状态。
+       默认文案写「已启用」—— 这是默认部署的真实状态，也是 no-JS 时的唯一信息。
+       app.js 拿到 summary.scheduler_enabled 后会**改写**它：关闭时换成告警色 +「调度已关闭」。
+       所以这里既不是硬编码的谎话，也不是空壳占位。可关闭：常驻会一直吃掉首屏纵向空间。 -->
+  <div id="banner" class="banner" data-tone="info" role="status">
+    <span id="banner-text">调度与下发已启用：任务会自动选点、投递到 BitComet 节点，进度每 15 秒回读。节点需为「在线」才会被选中（新节点请在「节点」页点一次探测）。</span>
+    <button type="button" id="banner-close" class="banner-close" title="关闭横幅（刷新后重新出现）"
+            aria-label="关闭横幅">×</button>
   </div>
 
   <header class="topbar">
     <span class="brand">下载网关 · 管理台</span>
-    <nav class="nav">
+    <nav class="nav" aria-label="主导航">
       <button class="nav-btn" data-view="overview">总览</button>
       <button class="nav-btn" data-view="nodes">节点</button>
       <button class="nav-btn" data-view="tasks">任务</button>
       <button class="nav-btn" data-view="events">告警</button>
       <button class="nav-btn" data-view="settings">设置</button>
-      <button class="nav-btn" id="logout-btn">退出</button>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <button class="nav-btn nav-exit" id="logout-btn">退出</button>
     </nav>
   </header>
 
+  <main id="main">
   <!-- ============ 登录 ============ -->
-  <section id="view-login" class="view">
+  <section id="view-login" class="view" hidden>
     <div class="card login-card">
-      <h2>登录</h2>
+      <h2 class="card-title">登录</h2>
       <form id="login-form">
-        <label>管理口令
+        <label>用户名
+          <input type="text" id="login-username" value="admin"
+                 autocomplete="username" autocapitalize="off" spellcheck="false" required />
+        </label>
+        <label>口令
           <input type="password" id="login-password" autocomplete="current-password" required />
         </label>
-        <button type="submit" class="primary">登录</button>
+        <button type="submit" class="primary block">登录</button>
       </form>
-      <div id="login-error" class="error-bar" hidden></div>
+      <div id="login-error" class="error-bar" role="alert" hidden></div>
       <!-- 忘记口令：口令只进服务端日志，取口令需要宿主机的日志读权限。
            这就是本产品的「身份证明」——不是邮箱、不是密保，而是容器控制权。 -->
       <details class="forgot">
@@ -52,11 +67,16 @@
 
   <!-- ============ 总览 ============ -->
   <section id="view-overview" class="view" hidden>
-    <h2>总览</h2>
+    <div class="view-head">
+      <h2>总览</h2>
+      <div class="view-actions">
+        <button id="overview-refresh">刷新</button>
+      </div>
+    </div>
     <div id="overview-grid" class="grid"></div>
     <h3>任务状态分布</h3>
     <div id="overview-counts" class="counts"></div>
-    <div id="overview-error" class="error-bar" hidden></div>
+    <div id="overview-error" class="error-bar" role="alert" hidden></div>
   </section>
 
   <!-- ============ 节点 ============ -->
@@ -64,22 +84,29 @@
     <div class="view-head">
       <h2>节点</h2>
       <div class="view-actions">
+        <input id="node-search" type="search" placeholder="按别名 / 地址筛选…" aria-label="筛选节点" />
         <button id="node-refresh">刷新</button>
         <button id="node-new" class="primary">新增节点</button>
       </div>
     </div>
     <p class="hint">
-      「调度开关」控制是否向该节点<b>派发新任务</b>，关闭它<b>不会</b>影响节点上正在运行的下载程序。
-      「在线」是实时探测结果，与开关状态<b>相互独立</b>：一台机器可以「已关闭但在线」，也可以「已启用但离线」。
+      「派发」开关控制是否向该节点<b>派发新任务</b>，关闭它<b>不会</b>影响节点上正在运行的下载程序。
+      「状态」与开关<b>相互独立</b>：一台机器可以「已关闭但在线」，也可以「已启用但离线」。
       探测超时 1.5 秒，离线节点会让本页稍慢。
     </p>
-    <div id="node-error" class="error-bar" hidden></div>
+    <div id="node-error" class="error-bar" role="alert" hidden></div>
     <div class="table-scroll">
       <table class="table">
         <thead>
           <tr>
-            <th>别名</th><th>地址</th><th>状态</th><th>账号</th><th>密码</th>
-            <th>角色</th><th>权重</th><th>并发</th><th>限速</th><th>派发</th><th>操作</th>
+            <th scope="col">别名</th>
+            <th scope="col">地址</th>
+            <th scope="col">状态</th>
+            <th scope="col">账号</th>
+            <th scope="col">密码</th>
+            <th scope="col">调度参数</th>
+            <th scope="col">派发</th>
+            <th scope="col">操作</th>
           </tr>
         </thead>
         <tbody id="node-rows"></tbody>
@@ -93,7 +120,11 @@
     <div class="view-head">
       <h2>任务</h2>
       <div class="view-actions">
-        <input id="task-search" type="search" placeholder="按 URL / 名称搜索…" />
+        <input id="task-search" type="search" placeholder="按 URL / 名称搜索…" aria-label="搜索任务" />
+        <label class="switch" title="每 5 秒自动刷新一次，用于盯进度">
+          <input type="checkbox" id="task-auto" />
+          <span>自动刷新</span>
+        </label>
         <button id="task-refresh">刷新</button>
       </div>
     </div>
@@ -102,11 +133,14 @@
       提交新任务的唯一入口是对外协议口 —— 用你的浏览器插件或 aria2 客户端往网关的
       <code>:6800</code> 推送；管理台<b>不提供</b>添加任务。
     </p>
-    <div id="task-error" class="error-bar" hidden></div>
+    <div id="task-error" class="error-bar" role="alert" hidden></div>
     <div class="table-scroll">
       <table class="table">
         <thead>
-          <tr><th>状态</th><th>名称</th><th>类型</th><th>进度</th><th>创建时间</th><th>操作</th></tr>
+          <tr>
+            <th scope="col">状态</th><th scope="col">名称</th><th scope="col">类型</th>
+            <th scope="col" class="prog-col">进度</th><th scope="col">创建时间</th><th scope="col">操作</th>
+          </tr>
         </thead>
         <tbody id="task-rows"></tbody>
       </table>
@@ -145,17 +179,20 @@
       <b>只读</b>：审计日志能被界面改写就不是证据了。
       按时间倒序，一次最多 500 条，翻页用游标（<code>before</code>）而不是页码 —— 日志一直在追加，页码会重复或漏行。
     </p>
-    <div id="event-error" class="error-bar" hidden></div>
+    <div id="event-error" class="error-bar" role="alert" hidden></div>
     <div class="table-scroll">
       <table class="table">
         <thead>
-          <tr><th>时间</th><th>级别</th><th>类别</th><th>节点</th><th>任务</th><th>内容</th><th>详情</th></tr>
+          <tr>
+            <th scope="col">时间</th><th scope="col">级别</th><th scope="col">类别</th>
+            <th scope="col">节点</th><th scope="col">任务</th><th scope="col">内容</th><th scope="col">详情</th>
+          </tr>
         </thead>
         <tbody id="event-rows"></tbody>
       </table>
     </div>
     <div id="event-empty" class="empty" hidden>没有符合条件的记录。</div>
-    <div class="view-actions" id="event-more-box" hidden>
+    <div class="view-actions center" id="event-more-box" hidden>
       <button id="event-more">加载更早</button>
     </div>
   </section>
@@ -170,8 +207,8 @@
       </div>
     </div>
     <div id="policy-note" class="notice"></div>
-    <div id="policy-error" class="error-bar" hidden></div>
-    <div id="policy-ok" class="ok-bar" hidden></div>
+    <div id="policy-error" class="error-bar" role="alert" hidden></div>
+    <div id="policy-ok" class="ok-bar" role="status" hidden></div>
     <p class="hint">
       拖动行首的把手可调整<b>优先级</b>（越靠上越优先）。带
       <span class="lock-tag">不可关闭</span> 标记的是容量安全阀，关掉会把节点压垮，因此禁止关闭。
@@ -180,8 +217,9 @@
       <table class="table" id="policy-table">
         <thead>
           <tr>
-            <th class="drag-col" aria-label="拖动"></th>
-            <th>策略</th><th>作用</th><th>分组</th><th class="prio-col">优先级</th><th>开关</th><th>生效</th>
+            <th scope="col" class="drag-col" aria-label="拖动"></th>
+            <th scope="col">策略</th><th scope="col">作用</th><th scope="col">分组</th>
+            <th scope="col" class="prio-col">优先级</th><th scope="col">开关</th><th scope="col">生效</th>
           </tr>
         </thead>
         <tbody id="policy-rows"></tbody>
@@ -190,7 +228,7 @@
 
     <!-- ---- 管理口令（用户可自行设置）---- -->
     <div class="card" id="pw-card">
-      <h3>管理口令</h3>
+      <h3 class="card-title">管理口令</h3>
       <p class="hint" id="pw-note">正在读取当前口令来源…</p>
       <div class="form-grid">
         <label>当前口令
@@ -206,8 +244,8 @@
       <div class="dialog-actions">
         <button id="pw-save" class="primary">修改口令</button>
       </div>
-      <div id="pw-error" class="error-bar" hidden></div>
-      <div id="pw-ok" class="ok-bar" hidden></div>
+      <div id="pw-error" class="error-bar" role="alert" hidden></div>
+      <div id="pw-ok" class="ok-bar" role="status" hidden></div>
     </div>
 
     <details id="env-box" class="env-box">
@@ -217,17 +255,24 @@
       </p>
       <div class="table-scroll">
         <table class="table">
-          <thead><tr><th>变量</th><th>值</th><th>风险</th><th>说明</th></tr></thead>
+          <thead><tr>
+            <th scope="col">变量</th><th scope="col">值</th><th scope="col">风险</th><th scope="col">说明</th>
+          </tr></thead>
           <tbody id="env-rows"></tbody>
         </table>
       </div>
     </details>
   </section>
+  </main>
 
   <!-- ============ 新增 / 编辑节点 ============ -->
-  <dialog id="node-dialog">
+  <dialog id="node-dialog" aria-labelledby="node-dialog-title">
     <form id="node-form">
       <h3 id="node-dialog-title">新增节点</h3>
+      <p class="hint">
+        地址可直接带凭据（<code>http://admin:pass@host:9085</code>），保存时会自动拆成「账号 / 密码」两栏，
+        地址栏只留干净的主机名 —— 否则每次打开本页都会把密码明文摊在表格里。
+      </p>
       <div class="form-grid">
         <label>别名（唯一，用于人识别）
           <input id="nf-alias" type="text" maxlength="64" required placeholder="例如：客厅 NAS" />
@@ -236,12 +281,13 @@
           <input id="nf-base-url" type="text" required placeholder="例如：http://203.0.113.10:9085" />
         </label>
         <label>账号
-          <input id="nf-user" type="text" placeholder="admin" />
+          <input id="nf-user" type="text" placeholder="admin" autocomplete="off" />
         </label>
         <label>密码
           <span class="pw-wrap">
-            <input id="nf-password" type="password" placeholder="新增必填；编辑时留空 = 不修改" />
-            <button type="button" id="nf-eye" class="icon-btn" title="显示当前密码">
+            <input id="nf-password" type="password" autocomplete="new-password"
+                   placeholder="新增必填；编辑时留空 = 不修改" />
+            <button type="button" id="nf-eye" class="icon-btn" title="显示当前密码" aria-label="显示当前密码">
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
                 <path d="M1.5 12s4-7 10.5-7 10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12Z"
                       fill="none" stroke="currentColor" stroke-width="1.6" />
@@ -273,7 +319,7 @@
           <input id="nf-enabled" type="checkbox" checked /> 纳入调度（派发开关）
         </label>
       </div>
-      <div id="node-form-error" class="error-bar" hidden></div>
+      <div id="node-form-error" class="error-bar" role="alert" hidden></div>
       <div class="dialog-actions">
         <button type="button" id="nf-cancel">取消</button>
         <button type="submit" class="primary">保存</button>
@@ -294,7 +340,7 @@
         不勾选时<b>只删除网关侧的任务记录</b>，节点上的文件保持原样 —— 这是默认行为，也是最安全的。
         勾选后网关会向节点下发删除；若节点侧没有该任务的文件记录，网关会<b>明确报错</b>而不是假装成功。
       </p>
-      <div id="taskdel-error" class="error-bar" hidden></div>
+      <div id="taskdel-error" class="error-bar" role="alert" hidden></div>
       <div class="dialog-actions">
         <button type="button" id="taskdel-cancel">取消</button>
         <button type="submit" class="danger">确认删除</button>
@@ -308,16 +354,19 @@
       <h3>删除节点</h3>
       <p>即将删除节点 <span id="nodedel-alias" class="strong"></span>。</p>
       <p class="hint">它上面的任务归属、组绑定会一并失去关联。此操作不可撤销。</p>
-      <label>请输入节点别名以确认
+      <label for="nodedel-confirm">请输入节点别名以确认
         <input id="nodedel-confirm" type="text" autocomplete="off" />
       </label>
-      <div id="nodedel-error" class="error-bar" hidden></div>
+      <div id="nodedel-error" class="error-bar" role="alert" hidden></div>
       <div class="dialog-actions">
         <button type="button" id="nodedel-cancel">取消</button>
         <button type="submit" class="danger">确认删除</button>
       </div>
     </form>
   </dialog>
+
+  <!-- 全局轻提示：成功/失败都在这里冒一句，不打断当前操作 -->
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script type="module" src="/app.js"></script>
 </body>

@@ -179,6 +179,7 @@ func run() error {
 		LogLevel:                cfg.LogLevel,
 		StateDir:                stateDirFromEnv(),
 		WebDir:                  cfg.WebDir,
+		AdminUser:               cfg.AdminUser,
 		AdminPasswordConfigured: !adminPolicy.Generated,
 		PublicTokenConfigured:   cfg.PublicToken != nil,
 		AllowFileDelete:         cfg.AllowFileDelete,

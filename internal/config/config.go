@@ -33,13 +33,15 @@ import (
 
 // 环境变量名（逐字对照 Rust 侧字面量）。
 const (
-	EnvPublicAddr        = "DISPATCH_PUBLIC_ADDR"
-	EnvAdminAddr         = "DISPATCH_ADMIN_ADDR"
-	EnvDB                = "DISPATCH_DB"
-	EnvMigrations        = "DISPATCH_MIGRATIONS"
-	EnvLog               = "DISPATCH_LOG"
-	EnvPublicToken       = "DISPATCH_PUBLIC_TOKEN"
-	EnvAdminPassword     = "DISPATCH_ADMIN_PASSWORD"
+	EnvPublicAddr    = "DISPATCH_PUBLIC_ADDR"
+	EnvAdminAddr     = "DISPATCH_ADMIN_ADDR"
+	EnvDB            = "DISPATCH_DB"
+	EnvMigrations    = "DISPATCH_MIGRATIONS"
+	EnvLog           = "DISPATCH_LOG"
+	EnvPublicToken   = "DISPATCH_PUBLIC_TOKEN"
+	EnvAdminPassword = "DISPATCH_ADMIN_PASSWORD"
+	// EnvAdminUser 是管理台登录用户名（默认 admin）。
+	EnvAdminUser         = "DISPATCH_ADMIN_USER"
 	EnvAdminCookieSecure = "DISPATCH_ADMIN_COOKIE_SECURE"
 	EnvStateDir          = "DISPATCH_STATE_DIR"
 	EnvWebDir            = "DISPATCH_WEB_DIR"
@@ -55,6 +57,8 @@ const (
 	DefaultMigrations = "migrations"
 	DefaultLogLevel   = "info"
 	DefaultCookieMode = "auto"
+	// DefaultAdminUser 是管理台登录用户名的默认值（与 adminpass.DefaultUser 一致）。
+	DefaultAdminUser = "admin"
 )
 
 // Config 是进程级配置（对应 Rust `struct Config`）。
@@ -76,6 +80,8 @@ type Config struct {
 	PublicToken *string
 	// AdminPassword `DISPATCH_ADMIN_PASSWORD`；nil = 启动生成随机口令。
 	AdminPassword *string
+	// AdminUser `DISPATCH_ADMIN_USER`；默认 admin。
+	AdminUser string
 	// AdminCookieSecure 会话 Cookie 的 `Secure` 策略。
 	AdminCookieSecure CookieSecureMode
 	// WebDir `DISPATCH_WEB_DIR`；nil = 用内嵌页面。
@@ -92,13 +98,16 @@ type Config struct {
 // Go 版据此直接返回 `Config`（不引入永不触发 error 的分支）。
 func FromEnv() Config {
 	return Config{
-		PublicAddr:        envOr(EnvPublicAddr, DefaultPublicAddr),
-		AdminAddr:         envOr(EnvAdminAddr, DefaultAdminAddr),
-		DBPath:            envOr(EnvDB, DefaultDB),
-		MigrationsDir:     envOr(EnvMigrations, DefaultMigrations),
-		LogLevel:          envOr(EnvLog, DefaultLogLevel),
-		PublicToken:       envOpt(EnvPublicToken),
-		AdminPassword:     envOpt(EnvAdminPassword),
+		PublicAddr:    envOr(EnvPublicAddr, DefaultPublicAddr),
+		AdminAddr:     envOr(EnvAdminAddr, DefaultAdminAddr),
+		DBPath:        envOr(EnvDB, DefaultDB),
+		MigrationsDir: envOr(EnvMigrations, DefaultMigrations),
+		LogLevel:      envOr(EnvLog, DefaultLogLevel),
+		PublicToken:   envOpt(EnvPublicToken),
+		AdminPassword: envOpt(EnvAdminPassword),
+		// 默认用户名与 `internal/adminpass.DefaultUser` 保持一致（两处字面量，
+		// 因为 config 与 adminpass 同处层 1，互相 import 会破坏分层）。
+		AdminUser:         envOr(EnvAdminUser, DefaultAdminUser),
 		AdminCookieSecure: ParseCookieSecureMode(envOr(EnvAdminCookieSecure, DefaultCookieMode)),
 		WebDir:            envOpt(EnvWebDir),
 		AllowFileDelete:   envBool(EnvAllowFileDelete, false),
@@ -110,9 +119,14 @@ func FromEnv() Config {
 //
 // 对照 Rust `resolve_admin_policy`：`None` 分支用 `ids::new_hex_128()`（32 字符十六进制）。
 func ResolveAdminPolicy(cfg Config) AdminPolicy {
+	user := cfg.AdminUser
+	if strings.TrimSpace(user) == "" {
+		user = DefaultAdminUser
+	}
 	if cfg.AdminPassword != nil {
 		return AdminPolicy{
 			Password:        *cfg.AdminPassword,
+			User:            user,
 			Generated:       false,
 			CookieSecure:    cfg.AdminCookieSecure,
 			AllowFileDelete: cfg.AllowFileDelete,
@@ -120,6 +134,7 @@ func ResolveAdminPolicy(cfg Config) AdminPolicy {
 	}
 	return AdminPolicy{
 		Password:        ids.NewHex128(),
+		User:            user,
 		Generated:       true,
 		CookieSecure:    cfg.AdminCookieSecure,
 		AllowFileDelete: cfg.AllowFileDelete,
@@ -209,6 +224,8 @@ func (m CookieSecureMode) String() string {
 type AdminPolicy struct {
 	// Password 管理口令（明文，仅存内存）。
 	Password string
+	// User 管理台登录用户名（默认 admin）。
+	User string
 	// Generated true = 口令由启动时生成（非环境注入）。
 	Generated bool
 	// CookieSecure Cookie `Secure` 属性策略。
@@ -235,6 +252,12 @@ type EnvSnapshot struct {
 	StateDir *string
 	// WebDir `DISPATCH_WEB_DIR`；nil = 内嵌。
 	WebDir *string
+	// AdminUser 管理台登录用户名（`DISPATCH_ADMIN_USER`，未设置时为 `admin`）。
+	//
+	// 加进快照的理由：它是本轮新增的**可配置业务项**，而这页的用途正是
+	// 「部署参数到底生效成了什么」。用户名不出现 ⇒ 用户改错了变量名也无从发现
+	// （症状是「明明配了还是登录不上」，而界面上根本找不到这一行）。
+	AdminUser string
 	// AdminPasswordConfigured 管理口令是否由环境注入。
 	AdminPasswordConfigured bool
 	// PublicTokenConfigured `DISPATCH_PUBLIC_TOKEN` 是否已配置。
@@ -300,6 +323,14 @@ func (e EnvSnapshot) Items() []ConfigItem {
 	push(EnvLog, e.LogLevel, "low", "日志级别")
 	push(EnvStateDir, valueOr(e.StateDir, "(默认)"), "low", "client_id 文件目录来源")
 	push(EnvWebDir, valueOr(e.WebDir, "(内嵌)"), "low", "管理台页面覆盖目录")
+	// 用户名和口令挨着放：它们是一对，分开摆会让人以为用户名不可配置。
+	// 用户名键名不含 password/token，因此不会被掩码 —— 它本来也不是秘密。
+	// 空值回落 `admin`：写 `(默认)` 反而看不出「现在到底认哪个用户名」。
+	adminUser := strings.TrimSpace(e.AdminUser)
+	if adminUser == "" {
+		adminUser = DefaultAdminUser
+	}
+	push(EnvAdminUser, adminUser, "low", "管理台登录用户名（改动需重启）")
 	push(EnvAdminPassword,
 		configuredText(e.AdminPasswordConfigured, "已配置", "（启动生成·仅本次有效）"),
 		"high", "管理口令是否由环境注入")

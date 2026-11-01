@@ -131,6 +131,8 @@ func New(st *store.Store, secrets *secret.SecretBox, cfg Config) *Engine {
 		cfg:     d,
 		deps: &dispatch.Deps{
 			Store: st, Secrets: secrets, VerifyTimeout: d.VerifyTimeout,
+			// BitComet 2.22+ 要求 add 带 save_folder，目录只能问节点（见 savefolder.go）。
+			SaveFolders: dispatch.NewSaveFolderCache(0),
 		},
 		poller:       poller,
 		log:          slog.Default(),
@@ -544,31 +546,43 @@ func (e *Engine) dispatchOne(ctx context.Context, t dispatch.QueuedTask, nodes [
 // 关掉的方式是 `INSERT OR REPLACE INTO app_config VALUES('scheduler.enabled','off',...)`，
 // 或环境变量 `DISPATCH_SCHEDULER=off`（优先级更高，便于容器一键停）。
 func (e *Engine) schedulerEnabled(ctx context.Context) (bool, error) {
+	return SchedulerEnabled(ctx, e.st), nil
+}
+
+// SchedulerEnabled 报告调度内核当前是否启用：环境变量优先，其次 `app_config`。
+//
+// 默认 **on**：这是与规格 C-09 建议值（缺省 off）的**有意不同**。
+// 理由：这个开关存在的目的是"出问题能一键停下"，不是"默认别动"——
+// 默认关着会让用户装完镜像、推了任务、看到一直排队，然后以为项目没做完。
+// 关掉的方式是 `INSERT OR REPLACE INTO app_config VALUES('scheduler.enabled','off',...)`，
+// 或环境变量 `DISPATCH_SCHEDULER=off`（优先级更高，便于容器一键停）。
+//
+// 导出给 `internal/admin` 的 summary 用：那个接口曾经硬编码 `false`，
+// 于是调度明明在跑，管理台却一直显示"未启用（任务只排队）" ——
+// 用户据此以为功能没做完，去查一个不存在的 bug。
+func SchedulerEnabled(ctx context.Context, st *store.Store) bool {
 	if v, ok := os.LookupEnv("DISPATCH_SCHEDULER"); ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "off", "0", "false", "no":
-			return false, nil
+			return false
 		case "on", "1", "true", "yes":
-			return true, nil
+			return true
 		}
 	}
-	rows, err := e.st.Query(ctx,
+	rows, err := st.Query(ctx,
 		`SELECT value FROM app_config WHERE key = 'scheduler.enabled'`)
 	if err != nil {
-		return true, nil // 读配置失败不该让整个调度停摆；按默认 on 继续
+		return true // 读配置失败不该让整个调度停摆；按默认 on 继续
 	}
-	if len(rows) == 0 {
-		return true, nil
+	if len(rows) == 0 || len(rows[0]) == 0 {
+		return true
 	}
-	v := ""
-	if s, ok := rows[0][0].(string); ok {
-		v = s
-	}
+	v, _ := rows[0][0].(string)
 	switch v {
 	case "off", "0", "false", "no":
-		return false, nil
+		return false
 	default:
-		return true, nil
+		return true
 	}
 }
 

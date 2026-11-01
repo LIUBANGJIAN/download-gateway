@@ -78,7 +78,12 @@ var ErrWeakPassword = errors.New("新口令不符合要求")
 //
 // 零值不可用，必须用 [NewCredential]。
 type Credential struct {
-	mu    sync.RWMutex
+	mu sync.RWMutex
+	// user 是管理台登录用户名（`DISPATCH_ADMIN_USER`，默认 admin）。
+	//
+	// 历史包袱：在加入用户名之前，登录只校验口令 —— 也就是说"用户名"这个
+	// 概念在协议里一直是缺的。前端仍会发送它，只是早先被忽略。
+	user  string
 	hash  string // 非空 = 用户在管理台设过，走 argon2id
 	plain string // hash 为空时用它（环境变量注入 / 启动时随机生成）
 	// temp 是「登录页自助找回」用的一次性临时口令，详见 temp.go。
@@ -96,9 +101,64 @@ func (c *Credential) clock() int64 {
 	return time.Now().Unix()
 }
 
+// DefaultUser 是未配置 `DISPATCH_ADMIN_USER` 时的管理台登录用户名。
+//
+// 保持 admin 是为了向后兼容：老部署只配了口令，升级后前端仍按 admin 登录，
+// 不该因为多了一个字段就登不进去。
+const DefaultUser = "admin"
+
 // NewCredential 用初始明文口令构造（环境变量或随机口令）。
 func NewCredential(plain string) *Credential {
-	return &Credential{plain: plain}
+	return &Credential{user: DefaultUser, plain: plain}
+}
+
+// WithUser 设置登录用户名（空白时保持默认）。返回自身便于链式调用。
+func (c *Credential) WithUser(user string) *Credential {
+	if c == nil {
+		return c
+	}
+	if u := strings.TrimSpace(user); u != "" {
+		c.mu.Lock()
+		c.user = u
+		c.mu.Unlock()
+	}
+	return c
+}
+
+// User 返回当前登录用户名（用于日志与界面提示，**不是**秘密）。
+func (c *Credential) User() string {
+	if c == nil {
+		return DefaultUser
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.user == "" {
+		return DefaultUser
+	}
+	return c.user
+}
+
+// VerifyUser 校验登录用户名。
+//
+// 用定长比较是为了与口令校验保持一致的手感（也避免把"用户名对不对"变成
+// 一个可测的时间差）。长度不同时 ConstantTimeCompare 必然返回 0，这是可接受的
+// —— 用户名本身不是秘密，它在 docker-compose 里明文写着。
+//
+// 空白输入按 [DefaultUser] 处理：老前端（或直接 curl）不带 username 时，
+// 只要部署用的就是默认用户名，照样能登录。
+func (c *Credential) VerifyUser(input string) bool {
+	// nil 必须在最前面挡掉：下面的 User() 对 nil 会回默认值，
+	// 若不留这一行，`(*Credential)(nil).VerifyUser("admin")` 会返回 true ——
+	// 一个"没配置凭据"的状态反而放行 admin。
+	if c == nil {
+		return false
+	}
+	want := c.User()
+	got := strings.TrimSpace(input)
+	if got == "" {
+		got = DefaultUser
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 // Verify 校验输入口令。

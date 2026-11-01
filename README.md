@@ -174,8 +174,10 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/
 
 ```bash
 # 登录拿会话（下面用 -b jar 带上）
+# 用户名默认 admin，可用 DISPATCH_ADMIN_USER 改；两个字段任一不对都是 401，
+# 错误提示统一为「用户名或口令错误」—— 不告诉你到底是哪个错，避免探测用户名是否存在。
 curl -sS -c jar -H 'Content-Type: application/json' \
-  -d '{"password":"<DISPATCH_ADMIN_PASSWORD>"}' http://127.0.0.1:8080/api/admin/login
+  -d '{"username":"admin","password":"<DISPATCH_ADMIN_PASSWORD>"}' http://127.0.0.1:8080/api/admin/login
 
 # 节点列表（?probe=0 可跳过在线探测，本地排查时更快）
 curl -sS -b jar 'http://127.0.0.1:8080/api/admin/nodes?probe=0'
@@ -339,6 +341,7 @@ docker restart <容器名>
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
+| `DISPATCH_ADMIN_USER` | `admin` | 管理台登录用户名。和口令一样可以在 `docker-compose.yml` 里直接配。**它不是秘密**（会明文显示在「设置 → 运行环境」表里，方便你核对部署参数到底生效成了什么），改它需要重启 |
 | `DISPATCH_ADMIN_PASSWORD` | 未设＝每次启动**随机生成**并打印到启动日志 | 管理口令。只要管理口离开了回环就必须显式设，否则容器一重启口令就换，你会当成"密码错了"反复重试，然后撞上连续 5 次失败锁 5 分钟 |
 | `DISPATCH_ADMIN_COOKIE_SECURE` | `auto` | 会话 Cookie 的 `Secure` 属性，取值 `auto` / `always` / `never`。`auto` ＝ **仅**在请求带 `X-Forwarded-Proto: https` 时加 `Secure`。这是对设计 `07 §5.1`「非 127.0.0.1 即加 Secure」的**刻意偏离**：按原文，在 `http://<局域网IP>:端口` 这种明文形态下浏览器**不会**回传该 cookie ⇒ 登录成功即丢会话 ⇒ 死循环。真正的解法是给管理口配 TLS 反代，然后设 `always` |
 | `DISPATCH_WEB_DIR` | 未设＝用**编进二进制的内嵌页面** | 指向磁盘目录以覆盖内嵌页面（改完刷新即生效，不用重编译）。需配合把宿主目录挂进容器 |

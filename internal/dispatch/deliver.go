@@ -28,6 +28,11 @@ type Deps struct {
 	VerifyPoll time.Duration
 	// Jitter 返回 [0.8,1.2) 的抖动系数（测试可注入定值）。
 	Jitter func() float64
+	// SaveFolders 缓存节点的默认下载目录（可为 nil，表示不缓存）。
+	//
+	// BitComet 2.22+ 要求 `add` 显式带 `save_folder`，而目录只能问节点。
+	// 缓存把"每任务一次往返"摊成"每节点 5 分钟一次"。
+	SaveFolders *SaveFolderCache
 }
 
 // DeliverInput 是一次投递的输入。
@@ -156,18 +161,35 @@ func Deliver(ctx context.Context, d *Deps, in DeliverInput) DeliverResult {
 	}
 
 	kind := protocol.ClassifyAddTarget(in.URL)
+
+	// BitComet 2.22+ 要求显式 save_folder（不传 → FATAL_ERROR: save_folder missing）。
+	// 目录因机器而异，只能问节点；查不到就退回"不传"的旧行为，让旧版节点照常工作。
+	taskType := "http"
+	if kind == protocol.AddKindTorrent {
+		taskType = "bt"
+	}
+	var saveFolder *string
+	if folder, ok := resolveSaveFolder(ctx, d, in.NodeID, cl, taskType); ok {
+		saveFolder = &folder
+	}
+
 	var resp map[string]any
 	if kind == protocol.AddKindTorrent {
-		resp, err = cl.AddTorrentLinks(ctx, in.URL, nil, in.StartLater)
+		resp, err = cl.AddTorrentLinks(ctx, in.URL, saveFolder, in.StartLater)
 	} else {
 		var fname *string
 		if in.Filename != "" {
 			f := in.Filename
 			fname = &f
 		}
-		resp, err = cl.AddHTTPTaskNamed(ctx, in.URL, fname, nil, in.StartLater)
+		resp, err = cl.AddHTTPTaskNamed(ctx, in.URL, fname, saveFolder, in.StartLater)
 	}
 	if err != nil {
+		// save_folder 相关的失败多半是缓存了过期目录（节点上改了下载路径），
+		// 丢掉缓存让下次重新问，避免这个错误被缓存粘住直到 TTL 到期。
+		if msg := err.Error(); strings.Contains(msg, "save_folder") {
+			d.SaveFolders.invalidate(in.NodeID)
+		}
 		return classifyError(err, in)
 	}
 

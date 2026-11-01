@@ -124,3 +124,78 @@ func TestNilCredentialRejects(t *testing.T) {
 		t.Fatalf("nil 凭据来源应为 environment，实际 %s", c.Source())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 用户名（`DISPATCH_ADMIN_USER`）
+// ---------------------------------------------------------------------------
+
+// TestVerifyUser 覆盖默认值、自定义值与空白输入的回退。
+//
+// 空白输入必须回退到 admin：加入用户名之前，所有客户端（含直接 curl）都
+// 不带这个字段。不回退等于升级即失联。
+func TestVerifyUser(t *testing.T) {
+	c := NewCredential("pw")
+	if c.User() != DefaultUser {
+		t.Fatalf("默认用户名应为 %q，实际 %q", DefaultUser, c.User())
+	}
+	ok := []string{"admin", " admin ", "", "   "}
+	for _, in := range ok {
+		if !c.VerifyUser(in) {
+			t.Fatalf("默认用户下 %q 应通过", in)
+		}
+	}
+	for _, in := range []string{"root", "Admin", "administrator"} {
+		if c.VerifyUser(in) {
+			t.Fatalf("默认用户下 %q 不应通过（区分大小写）", in)
+		}
+	}
+
+	c2 := NewCredential("pw").WithUser("ops")
+	if c2.User() != "ops" {
+		t.Fatalf("自定义用户名应为 ops，实际 %q", c2.User())
+	}
+	if !c2.VerifyUser("ops") || !c2.VerifyUser(" ops ") {
+		t.Fatalf("自定义用户名应通过（允许首尾空白）")
+	}
+	if c2.VerifyUser("admin") || c2.VerifyUser("") {
+		t.Fatalf("自定义用户名下，admin 与空输入都不应通过 —— 否则等于留了个后门")
+	}
+
+	// 空白用户名不覆盖默认值：`WithUser("")` 不该把用户名清成空串。
+	c3 := NewCredential("pw").WithUser("   ")
+	if c3.User() != DefaultUser {
+		t.Fatalf("空白用户名应保持默认，实际 %q", c3.User())
+	}
+
+	var nilCred *Credential
+	if nilCred.VerifyUser("admin") {
+		t.Fatal("nil 凭据不得通过任何用户名")
+	}
+	if nilCred.User() != DefaultUser {
+		t.Fatalf("nil 凭据的 User() 应回默认值")
+	}
+}
+
+// TestVerifyUserIndependentOfPassword 锁住"两个维度分别校验"这一点。
+//
+// 用户名对但口令错、口令对但用户名错，都必须失败 —— 任意一个短路通过
+// 都意味着另一半形同虚设。
+func TestVerifyUserIndependentOfPassword(t *testing.T) {
+	c := NewCredential("right-pw").WithUser("ops")
+	cases := []struct {
+		user, pass string
+		want       bool
+	}{
+		{"ops", "right-pw", true},
+		{"ops", "wrong-pw", false},
+		{"admin", "right-pw", false},
+		{"admin", "wrong-pw", false},
+	}
+	for _, cs := range cases {
+		userOK := c.VerifyUser(cs.user)
+		passOK := c.Verify(cs.pass)
+		if (userOK && passOK) != cs.want {
+			t.Fatalf("(%q,%q) 结果应为 %v，实际 user=%v pass=%v", cs.user, cs.pass, cs.want, userOK, passOK)
+		}
+	}
+}

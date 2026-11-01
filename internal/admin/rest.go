@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/LIUBANGJIAN/download-gateway/internal/domain"
+	"github.com/LIUBANGJIAN/download-gateway/internal/engine"
 	"github.com/LIUBANGJIAN/download-gateway/internal/ids"
 	"github.com/LIUBANGJIAN/download-gateway/internal/session"
 	"github.com/LIUBANGJIAN/download-gateway/internal/tasks"
@@ -26,7 +27,11 @@ import (
 const sessionMaxAge int64 = 1800
 
 // loginReq 是 `POST /api/admin/login` 请求体。
+//
+// Username 允许为空：加入用户名之前，登录只校验口令，老前端/脚本不会带它。
+// 空的场合按默认用户名（admin）处理 —— 见 adminpass.Credential.VerifyUser。
 type loginReq struct {
+	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
@@ -55,13 +60,17 @@ func (s *adminServer) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, CodeValidationError, err.Error())
 		return
 	}
-	// 口令来源有两条（见 `adminpass.Credential`）：库里的 argon2id 哈希优先，
-	// 没有哈希时才与环境变量/随机口令做定长定时比较。由 Credential 统一判定，
-	// 登录处不关心当前是哪一路 —— 否则「改过口令但登录仍比旧明文」会静默失效。
-	if !s.st.Credential.Verify(req.Password) {
+	// 用户名与口令**都要算完再判**（不短路）：先判用户名就 return 会让
+	// "用户名对不对"变成可测的时间差，也让失败计数漏记口令错误。
+	//
+	// 提示语统一成「用户名或口令错误」：分开说"用户不存在"/"口令错误"等于
+	// 告诉攻击者哪个用户名是有效的。
+	userOK := s.st.Credential.VerifyUser(req.Username)
+	passOK := s.st.Credential.Verify(req.Password)
+	if !userOK || !passOK {
 		count := s.st.Guard.RecordFailure(ip, now)
 		s.logSecurity(r, now, "admin_login_failed", map[string]any{"failures": count})
-		fail(w, http.StatusUnauthorized, CodeUnauthenticated, "口令错误")
+		fail(w, http.StatusUnauthorized, CodeUnauthenticated, "用户名或口令错误")
 		return
 	}
 
@@ -118,6 +127,25 @@ func (s *adminServer) summary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	env := s.st.Env
+
+	// 节点概览：曾经这里写死 `[]any{}`，于是总览永远显示"节点数 0"，
+	// 而节点页明明列着三台机器。两处说法不一致时，用户只信一处的坏消息。
+	nodes := make([]any, 0, 8)
+	if rows, qErr := s.st.Store.Query(r.Context(),
+		`SELECT node_id, alias, state, enabled FROM node ORDER BY node_id`); qErr == nil {
+		for _, row := range rows {
+			if len(row) < 4 {
+				continue
+			}
+			nodes = append(nodes, map[string]any{
+				"node_id": asInt64(row[0]),
+				"alias":   asString(row[1]),
+				"state":   asString(row[2]),
+				"enabled": asInt64(row[3]) != 0,
+			})
+		}
+	}
+
 	ok(w, map[string]any{
 		"version":            s.version,
 		"uptime_seconds":     ids.NowSecs() - s.st.StartedAt,
@@ -126,7 +154,7 @@ func (s *adminServer) summary(w http.ResponseWriter, r *http.Request) {
 		"migration_versions": migrations,
 		"task_counts":        items,
 		"task_total":         total,
-		"nodes":              []any{},
+		"nodes":              nodes,
 		"env_flags": map[string]any{
 			"public_token_configured":   env.PublicTokenConfigured,
 			"admin_password_configured": env.AdminPasswordConfigured,
@@ -134,7 +162,8 @@ func (s *adminServer) summary(w http.ResponseWriter, r *http.Request) {
 			"public_cors":               env.PublicCORS,
 			"admin_cookie_secure":       env.AdminCookieSecure.String(),
 		},
-		"scheduler_enabled": false,
+		// 真实运行状态（env 开关 + app_config），不再写死 false。
+		"scheduler_enabled": engine.SchedulerEnabled(r.Context(), s.st.Store),
 	})
 	s.renewCookie(w, r, exp)
 }
@@ -266,7 +295,7 @@ func (s *adminServer) guardWrite(r *http.Request) (int64, session.Guard) {
 	if g != session.GuardOK {
 		return 0, g
 	}
-	if !session.SameOrigin(r.Header) {
+	if !session.SameOrigin(r) {
 		return exp, session.GuardCSRFInvalid
 	}
 	return exp, session.GuardOK

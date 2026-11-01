@@ -1,48 +1,110 @@
-/* 下载网关管理台样式（原生 CSS，零构建）。视觉对齐设计稿：卡片 / 表格 / 徽标 / 错误条 / 危险红。 */
+/* 下载网关管理台样式（原生 CSS，零构建）。
+ *
+ * 设计约束：
+ *  1. 零依赖零构建 —— 只能有一个文件，不许 @import 外链字体或图标库（离线/内网要能跑）；
+ *  2. 颜色不单独承担信息 —— 每个有色元素旁边必须还有文字（色盲可读，见 .dot / .lvl）；
+ *  3. 表格列多，窄屏优先横滚而不是换行挤压（.table-scroll）。
+ */
 
 :root {
+  color-scheme: dark;
+
   --bg: #0f1115;
   --panel: #171a21;
+  --panel-2: #1b2030;
   --border: #262b36;
+  --border-strong: #333a48;
   --text: #e6e8ec;
   --muted: #8b93a3;
   --accent: #3b82f6;
+  --accent-soft: #1e2a44;
   --ok: #22c55e;
   --warn: #f59e0b;
   --danger: #ef4444;
+  --radius: 10px;
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
+  min-height: 100vh;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
+/* 键盘用户必须看得见焦点。鼠标点击不闪 —— 用 :focus-visible 而不是 :focus。 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection { background: #2c4270; color: #fff; }
+
+/* 深色滚动条：默认浅色条在深色面板上很刺眼（Chrome/Edge/Safari） */
+* { scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ── 横幅 ─────────────────────────────────────────────────────────────── */
 .banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 9px 44px 9px 16px;
+  position: relative;
+  font-weight: 600;
+  font-size: 13px;
+  text-align: center;
   background: #3a2d05;
   color: #fde68a;
   border-bottom: 1px solid #5a4508;
-  padding: 10px 16px;
-  text-align: center;
-  font-weight: 600;
 }
+/* 调度被关掉时换成告警色：这是「任务只排队不下载」的状态，不能和正常态同色 */
+.banner[data-tone="warn"] { background: #3a1414; color: #fca5a5; border-bottom-color: #7f1d1d; }
+.banner[hidden] { display: none; }
 
+.banner-close {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  padding: 0 8px;
+  font-size: 18px;
+  line-height: 1.4;
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.65;
+}
+.banner-close:hover { opacity: 1; border-color: transparent; }
+
+/* ── 顶栏 ─────────────────────────────────────────────────────────────── */
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 20;
 }
 
-.brand { font-weight: 700; letter-spacing: 0.5px; }
-.nav { display: flex; gap: 8px; }
+.brand { font-weight: 700; letter-spacing: 0.4px; white-space: nowrap; }
+.nav { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.nav-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
 
-.nav-btn, button {
+button, .nav-btn {
   background: #232838;
   color: var(--text);
   border: 1px solid var(--border);
@@ -50,9 +112,12 @@ body {
   padding: 6px 12px;
   cursor: pointer;
   font: inherit;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
 }
 
-.nav-btn:hover, button:hover { border-color: var(--accent); }
+button:hover:not(:disabled), .nav-btn:hover { border-color: var(--accent); background: #283045; }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 button.primary {
   background: var(--accent);
@@ -60,21 +125,69 @@ button.primary {
   color: #fff;
   font-weight: 600;
 }
+button.primary:hover:not(:disabled) { background: #2f6fd8; border-color: #2f6fd8; }
 
-.view { padding: 16px; max-width: 1080px; margin: 0 auto; }
-h2 { font-size: 16px; color: var(--muted); font-weight: 600; }
+button.danger {
+  color: #fca5a5;
+  border-color: #7f1d1d;
+  background: #2a1414;
+}
+button.danger:hover:not(:disabled) { background: #3a1414; border-color: var(--danger); }
+
+/* 表格行内按钮：行高敏感，用更小号，避免每行被按钮撑高 */
+button.sm { padding: 3px 8px; font-size: 12.5px; border-radius: 6px; }
+
+button.block { width: 100%; margin-top: 4px; padding: 9px 12px; }
+
+.nav-btn.active {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent-soft);
+}
+.nav-exit { color: var(--muted); }
+.nav-exit:hover { color: var(--danger); border-color: var(--danger); }
+
+/* 未登录时导航整块藏掉。
+   留着的话点「节点」只会拿到 401 再弹回登录页 —— 一次点击一次白跑，
+   而且让人以为已经登录了。 */
+body[data-view="login"] .nav { display: none; }
+
+/* ── 布局 ─────────────────────────────────────────────────────────────── */
+/* 节点表 8 列 + 操作按钮，1080px 会把「状态」挤成折行，放宽到 1280 */
+.view { padding: 16px; max-width: 1280px; margin: 0 auto; }
+.view[hidden] { display: none; }
+
+h2 { font-size: 17px; font-weight: 650; margin: 4px 0 12px; }
+h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 22px 0 8px; }
+.card-title { margin: 0 0 14px; color: var(--text); }
+
+.view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.view-head h2 { margin-bottom: 0; }
+.view-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.view-actions.center { justify-content: center; margin-top: 14px; }
+.view-actions input[type="search"] { width: 230px; margin-top: 0; }
+.view-actions select { width: auto; margin-top: 0; }
 
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 16px;
   margin-bottom: 16px;
 }
 
-.login-card { max-width: 360px; margin: 48px auto; }
+.login-card { max-width: 380px; margin: 56px auto; box-shadow: var(--shadow); }
 
-label { display: block; margin-bottom: 12px; color: var(--muted); }
+/* ── 表单 ─────────────────────────────────────────────────────────────── */
+label { display: block; margin-bottom: 14px; color: var(--muted); font-size: 13px; }
+
 input, select, textarea {
   width: 100%;
   margin-top: 6px;
@@ -84,57 +197,152 @@ input, select, textarea {
   border: 1px solid var(--border);
   border-radius: 8px;
   font: inherit;
+  font-size: 14px;
+  transition: border-color 0.12s;
 }
+input:hover:not(:disabled), select:hover:not(:disabled) { border-color: var(--border-strong); }
+input:focus, select:focus { border-color: var(--accent); outline: none; }
+input:disabled { opacity: 0.55; }
+/* 勾选 + 禁用（容量安全阀）要能看出「它是开着的，只是不许关」。
+   统一压到 0.55 时，蓝色勾被冲淡到几乎看不见，实测截图里像个空框 ——
+   用户会以为安全阀是关的，进而以为误操作能把它关掉。 */
+.switch input:disabled:checked { opacity: 0.9; }
+input::placeholder { color: #5d6575; }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-.counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* 关掉 number 输入的上下箭头：这套 UI 里没人靠点击微调权重 */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 16px;
+}
+.form-grid label.inline { grid-column: 1 / -1; }
+label.inline { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--text); }
+label.inline input { width: auto; margin: 0; }
+
+/* ── 总览 ─────────────────────────────────────────────────────────────── */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+.grid .card { margin-bottom: 0; }
+.grid .card .k { color: var(--muted); font-size: 12.5px; }
+.grid .card .v { font-size: 15px; margin-top: 2px; word-break: break-all; }
+
+.counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 
 .badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
   font-size: 12px;
   background: #232838;
   color: var(--warn);
+  white-space: nowrap;
 }
+
+/* 任务状态着色：只按「需要人关注」的程度分级，
+   成功=绿、进行中=蓝、失败=红、其余=中性，具体状态字写在徽标里。 */
+.badge[data-state="completed"] { background: #14331f; color: #86efac; }
+.badge[data-state="failed"],
+.badge[data-state="error"] { background: #3a1414; color: #fca5a5; }
+.badge[data-state="dispatching"],
+.badge[data-state="downloading"],
+.badge[data-state="paused"] { background: var(--accent-soft); color: #bfdbfe; }
 
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
 
+/* ── 表格 ─────────────────────────────────────────────────────────────── */
+.table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
 .table { width: 100%; border-collapse: collapse; }
-.table th, .table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
-.table th { color: var(--muted); font-weight: 600; }
+.table th, .table td {
+  text-align: left;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12.5px;
+  white-space: nowrap;
+  background: #14171d;
+  position: sticky;
+  top: 0;
+}
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr:hover { background: var(--panel-2); }
+.table td { font-size: 13.5px; }
 
+/* 「调度参数」是一格放三维：上面权重，下面并发/限速。
+   合并的原因是节点表原本 11 列，1080px 下「状态」列被挤到折行、眼睛按钮掉到第二行。 */
+.stack { display: flex; flex-direction: column; gap: 1px; line-height: 1.35; }
+.stack .sub { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+.role-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  /* 窄屏下别名列会被压到几十像素，不锁 nowrap 的话「通用」会竖排成两行 */
+  white-space: nowrap;
+}
+
+/* ── 进度条 ───────────────────────────────────────────────────────────── */
+.prog-col { width: 190px; }
+.prog-cell { display: flex; align-items: center; gap: 8px; min-width: 150px; }
+.prog {
+  flex: 1;
+  height: 6px;
+  min-width: 70px;
+  background: #232838;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.prog-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.prog-bar.done { background: var(--ok); }
+.prog-bar.failed { background: var(--danger); }
+.prog-num { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 12.5px; }
+
+/* ── 提示条 ───────────────────────────────────────────────────────────── */
 .error-bar, .ok-bar {
   margin-top: 12px;
-  padding: 8px 12px;
+  padding: 9px 12px;
   border-radius: 8px;
+  font-size: 13px;
+  word-break: break-word;
 }
 .error-bar { background: #3a1414; color: #fca5a5; border: 1px solid #7f1d1d; }
 .ok-bar { background: #14331f; color: #86efac; border: 1px solid #166534; }
-.empty { color: var(--muted); padding: 24px; text-align: center; }
-.danger { color: var(--danger); }
+.error-bar[hidden], .ok-bar[hidden] { display: none; }
 
-/* ===== 本次增量新增 ===== */
-
-.nav-btn.active { border-color: var(--accent); color: #fff; background: #1e2a44; }
-
-.view-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+/* 空状态贴在表格卡片下沿，而不是浮在外面自成一块 ——
+   否则「表头一个框 + 下面一行孤立文字」看起来像两件不相干的东西。 */
+.empty {
+  color: var(--muted);
+  padding: 32px;
+  text-align: center;
+  font-size: 13.5px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  margin-top: -1px;
 }
-.view-actions { display: flex; gap: 8px; align-items: center; }
-.view-actions input[type="search"] { width: 240px; margin-top: 0; }
-
-h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 20px 0 8px; }
+.empty[hidden] { display: none; }
 
 .hint {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.7;
-  margin: 8px 0 12px;
+  margin: 8px 0 14px;
 }
 .hint code {
   background: #232838;
@@ -144,17 +352,18 @@ h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 20px 0 8px;
 }
 
 .notice {
-  background: #1e2a44;
+  background: var(--accent-soft);
   border: 1px solid #2c4270;
   color: #bfdbfe;
   border-radius: 8px;
-  padding: 8px 12px;
+  padding: 9px 12px;
   font-size: 13px;
   margin-bottom: 12px;
 }
+.notice:empty { display: none; }
 
 /* 「忘记口令」折叠块：登录卡片里的次要入口，默认收起，不抢主流程的视觉权重。 */
-.forgot { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.forgot { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
 .forgot summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .forgot summary:hover { color: var(--accent); }
 .forgot .hint { margin: 8px 0; }
@@ -162,20 +371,18 @@ h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 20px 0 8px;
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .nowrap { white-space: nowrap; }
 .muted { color: var(--muted); }
+.strong { font-weight: 700; }
+.desc { color: var(--muted); font-size: 13px; }
+.danger-text { color: var(--danger); }
 
 /* 策略「已生效」——与 .muted 并排使用，一眼区分哪几条真的在影响调度 */
 .eff-on { color: var(--ok); }
 
 /* 告警级别：颜色只用来分级，不承担"这行重不重要"的判断（那由文字说）。 */
-.lvl { font-size: 12px; padding: 1px 6px; border-radius: 9px; border: 1px solid currentColor; }
+.lvl { font-size: 12px; padding: 1px 7px; border-radius: 9px; border: 1px solid currentColor; }
 .lvl-info { color: var(--muted); }
 .lvl-warn { color: var(--warn); }
 .lvl-error { color: var(--danger); }
-.strong { font-weight: 700; }
-.desc { color: var(--muted); font-size: 13px; }
-
-/* 表格横向滚动：节点列较多，窄屏下不能撑破布局 */
-.table-scroll { overflow-x: auto; }
 
 /* 在线 / 离线小圆点 —— 颜色之外还有文案，不单靠颜色传达信息（色盲可读） */
 .dot {
@@ -188,17 +395,20 @@ h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 20px 0 8px;
 }
 .dot-on { background: var(--ok); }
 .dot-off { background: var(--danger); }
+/* 第三态：端口可达但调度不可用（口令错 / 节点侧「App 访问」关闭）。
+   以前这种节点被显示成绿色"在线"，用户以为能派活，实际一个任务也投不进去。 */
+.dot-warn { background: var(--warn); }
 
 /* 开关 */
-.switch { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--text); cursor: pointer; }
-.switch input { width: auto; margin: 0; }
+.switch { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--text); cursor: pointer; font-size: 13px; }
+.switch input { width: auto; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .switch input:disabled { cursor: not-allowed; }
 
 .icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 6px;
+  padding: 5px 7px;
   line-height: 1;
 }
 .pw-wrap { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
@@ -208,14 +418,15 @@ h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 20px 0 8px;
   background: #232838;
   padding: 1px 6px;
   border-radius: 4px;
+  word-break: break-all;
 }
 
 /* 策略表的拖拽把手 */
-.drag-col { width: 28px; }
+.drag-col { width: 30px; }
 .handle { cursor: grab; color: var(--muted); user-select: none; letter-spacing: -2px; }
 tr.dragging { opacity: 0.4; }
-tr[draggable="true"]:hover { background: #1b2030; }
-.prio-col { width: 80px; }
+tr[draggable="true"]:hover { background: var(--panel-2); }
+.prio-col { width: 84px; }
 .prio { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 
 .lock-tag {
@@ -228,39 +439,87 @@ tr[draggable="true"]:hover { background: #1b2030; }
   color: #fde68a;
 }
 
-.risk { padding: 1px 6px; border-radius: 999px; font-size: 12px; }
+.risk { padding: 1px 7px; border-radius: 999px; font-size: 12px; }
 .risk-low { background: #1b2a1e; color: #86efac; }
 .risk-medium { background: #3a2d05; color: #fde68a; }
 .risk-high { background: #3a1414; color: #fca5a5; }
 
-.env-box { margin-top: 24px; }
+.env-box { margin-top: 26px; }
 .env-box summary { cursor: pointer; color: var(--muted); font-weight: 600; padding: 8px 0; }
+.env-box summary:hover { color: var(--accent); }
 
-/* 弹窗 */
+/* 告警详情列：完整内容都在库里，界面上截断 + title 悬浮看全文，
+   否则一条长 JSON 会把整表撑到几千像素宽。 */
+.detail-cell {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+/* ── 弹窗 ─────────────────────────────────────────────────────────────── */
 dialog {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px;
-  max-width: 640px;
+  max-width: 680px;
   width: calc(100% - 32px);
+  box-shadow: var(--shadow);
 }
-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.65); }
 dialog h3 { margin-top: 0; color: var(--text); font-size: 16px; }
-
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 4px 16px;
-}
-.form-grid label.inline { grid-column: 1 / -1; }
-label.inline { display: flex; align-items: center; gap: 8px; }
-label.inline input { width: auto; margin: 0; }
 
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+
+/* ── 全局轻提示 ───────────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%) translateY(8px);
+  padding: 9px 18px;
+  border-radius: 999px;
+  background: #232838;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.18s, transform 0.18s;
+  pointer-events: none;
+  z-index: 100;
+  max-width: calc(100% - 32px);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast[data-tone="ok"] { border-color: #166534; color: #86efac; }
+.toast[data-tone="err"] { border-color: #7f1d1d; color: #fca5a5; }
+.toast[hidden] { display: none; }
+
+/* ── 窄屏 ─────────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .view { padding: 12px; }
+  .topbar { padding: 8px 12px; }
+  .brand { font-size: 13px; }
+  .nav { gap: 4px; }
+  .nav-btn { padding: 5px 9px; font-size: 13px; }
+  .nav-sep { display: none; }
+  .view-actions input[type="search"] { width: 100%; }
+  .view-actions { width: 100%; }
+  .login-card { margin: 28px auto; }
+}
+
+/* 尊重系统的「减少动态效果」：本页动画只用于状态变化提示，可以全部关掉。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
 }

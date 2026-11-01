@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,6 +97,12 @@ type nodeView struct {
 	Enabled       bool    `json:"enabled"`
 	State         string  `json:"state"`
 	Online        bool    `json:"online"`
+	// Reachable 是"端口通不通"（内联探活的结论），与 State 是**两个维度**。
+	//
+	// 曾经 toView 用内联探活的 online 直接覆盖 State，后果是 `degraded`
+	// （口令错 / 节点侧「App 访问」关闭）被抹成 `online`：管理台显示绿色"在线"，
+	// 调度器却因为 C2 根本不选它 —— 两边说法不一致，用户会去查一个不存在的 bug。
+	Reachable     bool    `json:"reachable"`
 	HTTPCode      *int    `json:"http_code"`
 	LatencyMs     *int64  `json:"latency_ms"`
 	ProbeError    *string `json:"probe_error"`
@@ -128,7 +135,7 @@ func (r nodeRow) toView(probe *probeResult) nodeView {
 	v := nodeView{
 		NodeID:        r.nodeID,
 		Alias:         r.alias,
-		BaseURL:       r.baseURL,
+		BaseURL:       maskURLCredentials(r.baseURL),
 		User:          r.user,
 		PasswordSet:   r.passEnc != "",
 		Weight:        r.weight,
@@ -146,11 +153,12 @@ func (r nodeRow) toView(probe *probeResult) nodeView {
 		UpdatedAt:     r.updatedAt,
 	}
 	if probe != nil {
-		if probe.online {
-			v.State, v.Online = "online", true
-		} else {
-			v.State, v.Online = "offline", false
-		}
+		// 内联探活只补充**可达性**这一维，不覆盖 State。
+		//
+		// State 是调度内核的权威判断（走完整登录 + about 调用，能识别
+		// 口令错误 / 「App 访问」关闭）；内联探活只看端口有没有响应。
+		// 两者不是一回事 —— 用后者覆盖前者，会把 degraded 显示成 online。
+		v.Reachable = probe.online
 		v.HTTPCode = probe.httpCode
 		latency := probe.latencyMs
 		v.LatencyMs = &latency
@@ -456,6 +464,49 @@ func mapNodeUniqueViolation(err error, alias string) *nodeErr {
 }
 
 // validateBaseURL 校验基址：必须带 http/https 方案，且不含空白。
+// baseURLCredRe 匹配 `scheme://user:pass@` 这一段（只匹配到 `@` 为止）。
+var baseURLCredRe = regexp.MustCompile(`(?i)^([a-z][a-z0-9+.\-]*://)([^/@]+):([^/@]+)@`)
+
+// splitURLCredentials 把地址里内嵌的凭据拆出来。
+//
+// 用户习惯直接粘浏览器/群晖面板上那种带凭据的地址：
+//
+//	http://admin:admin@192.168.10.250:9085
+//
+// 原样存有两个后果，都很糟：
+//  1. 节点列表把这个串显示出来，口令就明文摊在屏幕上（截图、录屏、共享全会泄）；
+//  2. 真正用于连节点的 `user`/`password` 字段还是空的，探测直接失败。
+//
+// 所以这里主动拆：地址只留 `scheme://host:port`，凭据回填到对应字段。
+// 返回值里的 user/pass 只在该字段原本为空时才被采用（显式填写优先）。
+func splitURLCredentials(raw, user, pass string) (cleanURL, outUser, outPass string) {
+	m := baseURLCredRe.FindStringSubmatch(strings.TrimSpace(raw))
+	if m == nil {
+		return raw, user, pass
+	}
+	cleanURL = m[1] + strings.TrimSpace(raw)[len(m[0]):]
+	if strings.TrimSpace(user) == "" {
+		user = m[2]
+	}
+	if pass == "" {
+		pass = m[3]
+	}
+	return cleanURL, user, pass
+}
+
+// maskURLCredentials 在**回显**时把地址里的口令换成 `***`。
+//
+// 只影响展示，库里存的仍是原值（调度要拿它连节点）。万一有历史数据带着凭据
+// 进了库，至少界面上不会再明文出现第二次。
+func maskURLCredentials(raw string) string {
+	m := baseURLCredRe.FindStringSubmatch(raw)
+	if m == nil {
+		return raw
+	}
+	return m[1] + m[2] + ":***@" + raw[len(m[0]):]
+}
+
+// validateBaseURL 校验并归一化节点地址。
 func validateBaseURL(u string) (string, *nodeErr) {
 	t := strings.TrimSpace(u)
 	if t == "" {
@@ -533,7 +584,17 @@ func (s *adminServer) createNode(ctx context.Context, req nodeCreateReq) (nodeVi
 	if aerr != nil {
 		return nodeView{}, aerr
 	}
-	baseURL, uerr := validateBaseURL(req.BaseURL)
+	// 地址里可能内嵌凭据（用户常直接粘浏览器/群晖面板上的
+	// `http://user:pass@host:port`）。先拆再校验：拆出来的凭据回填到
+	// user/password 字段，地址本身保持干净，避免口令进库又被明文回显。
+	rawUser, rawPass := "", ""
+	if req.User != nil {
+		rawUser = strings.TrimSpace(*req.User)
+	}
+	rawPass = req.Password
+	cleanURL, credUser, credPass := splitURLCredentials(req.BaseURL, rawUser, rawPass)
+
+	baseURL, uerr := validateBaseURL(cleanURL)
 	if uerr != nil {
 		return nodeView{}, uerr
 	}
@@ -544,8 +605,11 @@ func (s *adminServer) createNode(ctx context.Context, req nodeCreateReq) (nodeVi
 			return nodeView{}, rerr
 		}
 	}
-	if req.Password == "" {
-		return nodeView{}, nodeInvalid("新增节点时密码必填")
+	// 判据必须用 credPass（拆分之后的值），不能用 rawPass：
+	// 用户如果把凭据写在地址里（`http://user:pass@host:port`），rawPass 是空的，
+	// 用 rawPass 判就会把一次合法请求判成「密码必填」—— 实测踩到过（422）。
+	if credPass == "" {
+		return nodeView{}, nodeInvalid("新增节点时密码必填（可填在密码框，或写在地址里 http://user:pass@host:port）")
 	}
 	weight := 1.0
 	if req.Weight != nil {
@@ -562,11 +626,11 @@ func (s *adminServer) createNode(ctx context.Context, req nodeCreateReq) (nodeVi
 	if nerr := validateNodeNumbers(weight, maxConcurrent, maxRateKbps); nerr != nil {
 		return nodeView{}, nerr
 	}
+	// 默认 user 是 admin（BitComet 出厂值）；地址里若带了凭据，splitURLCredentials
+	// 已经把它填进 credUser，优先级高于默认值。
 	user := "admin"
-	if req.User != nil {
-		if t := strings.TrimSpace(*req.User); t != "" {
-			user = t
-		}
+	if credUser != "" {
+		user = credUser
 	}
 	tags := ""
 	if req.Tags != nil {
@@ -577,7 +641,7 @@ func (s *adminServer) createNode(ctx context.Context, req nodeCreateReq) (nodeVi
 		enabled = *req.Enabled
 	}
 
-	passEnc, err := s.st.Secrets.Wrap(req.Password)
+	passEnc, err := s.st.Secrets.Wrap(credPass)
 	if err != nil {
 		return nodeView{}, nodeInvalid("密码加密失败：%s", err.Error())
 	}
@@ -663,9 +727,21 @@ func (s *adminServer) updateNode(ctx context.Context, id int64, req nodeUpdateRe
 		alias = next
 	}
 	baseURL := cur.baseURL
+	// 编辑时同样允许粘贴带凭据的地址：拆出来的值暂存，稍后只在
+	// user/password **没有显式给出**时才采用（显式输入优先）。
+	credUserFromURL, credPassFromURL := "", ""
 	if req.BaseURL != nil {
+		inUser, inPass := "", ""
+		if req.User != nil {
+			inUser = strings.TrimSpace(*req.User)
+		}
+		if req.Password != nil {
+			inPass = *req.Password
+		}
+		cleanURL, cu, cp := splitURLCredentials(*req.BaseURL, inUser, inPass)
+		credUserFromURL, credPassFromURL = cu, cp
 		var uerr *nodeErr
-		if baseURL, uerr = validateBaseURL(*req.BaseURL); uerr != nil {
+		if baseURL, uerr = validateBaseURL(cleanURL); uerr != nil {
 			return nodeView{}, uerr
 		}
 	}
@@ -702,6 +778,13 @@ func (s *adminServer) updateNode(ctx context.Context, id int64, req nodeUpdateRe
 			return nodeView{}, nodeInvalid("密码加密失败：%s", wrapErr.Error())
 		}
 		passEnc = enc
+	} else if credPassFromURL != "" {
+		// 地址里带了凭据（且 password 字段没显式给出）⇒ 采用拆出来的口令。
+		enc, wrapErr := s.st.Secrets.Wrap(credPassFromURL)
+		if wrapErr != nil {
+			return nodeView{}, nodeInvalid("密码加密失败：%s", wrapErr.Error())
+		}
+		passEnc = enc
 	}
 
 	user := cur.user
@@ -709,6 +792,9 @@ func (s *adminServer) updateNode(ctx context.Context, id int64, req nodeUpdateRe
 		if t := strings.TrimSpace(*req.User); t != "" {
 			user = t
 		}
+	} else if credUserFromURL != "" {
+		// 只在地址里写了凭据、而 user 字段没显式给出时才采用。
+		user = credUserFromURL
 	}
 	tags := cur.tags
 	if req.Tags != nil {

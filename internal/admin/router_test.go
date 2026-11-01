@@ -18,6 +18,7 @@ import (
 	"github.com/LIUBANGJIAN/download-gateway/internal/config"
 	"github.com/LIUBANGJIAN/download-gateway/internal/domain"
 	"github.com/LIUBANGJIAN/download-gateway/internal/ids"
+	"github.com/LIUBANGJIAN/download-gateway/internal/secret"
 	"github.com/LIUBANGJIAN/download-gateway/internal/state"
 	"github.com/LIUBANGJIAN/download-gateway/internal/store"
 	"github.com/LIUBANGJIAN/download-gateway/internal/tasks"
@@ -37,6 +38,7 @@ func newAdminEnv(t *testing.T) (*httptest.Server, *http.Client, *store.Store) {
 
 	policy := &config.AdminPolicy{
 		Password:        testAdminPassword,
+		User:            "admin",
 		Generated:       false,
 		CookieSecure:    config.CookieSecureNever,
 		AllowFileDelete: false,
@@ -50,7 +52,11 @@ func newAdminEnv(t *testing.T) (*httptest.Server, *http.Client, *store.Store) {
 		AdminPasswordConfigured: true,
 		AdminCookieSecure:       config.CookieSecureNever,
 	}
-	as := state.NewAdminState(st, ids.NowSecs(), policy, env, nil, nil)
+	// Secrets 必须给一个真盒子：节点增删改要加密口令，传 nil 会在
+	// `SecretBox.Wrap` 上空指针 panic —— 表现为"连接直接断掉（EOF）"，
+	// 而不是一个可读的 500，排查成本很高。
+	secrets := secret.WithKey("0123456789abcdef0123456789abcdef")
+	as := state.NewAdminState(st, ids.NowSecs(), policy, env, secrets, nil)
 	srv := httptest.NewServer(NewRouter(as, "0.1.3"))
 	t.Cleanup(srv.Close)
 

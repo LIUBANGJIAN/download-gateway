@@ -35,29 +35,40 @@ type TaskListParams struct {
 
 // FetchTaskListParams 按给定参数拉一页任务列表（**扁平信封**：`tasks` 在顶层）。
 //
-// 为什么不用 [Client.FetchTaskList]：那个方法固定发 `{}`，拿到的是节点默认
-// 分页（可能只有 50 条）。回读同步必须能指定 `state_group` 与 `limit`，
-// 否则节点上任务一多就会**静默漏掉**后面的行。
+// 为什么要单独构造 body 而不是固定发 `{}`：回读同步需要指定 `state_group`，
+// 否则拿到的只是节点默认视图（可能不含已停止的任务）。
+//
+// # 为什么不发分页参数（真机实测结论，2026-11-01）
+//
+// BitComet **2.23 直接拒绝** `limit` 与 `start`：任何值都会返回
+// `FATAL_ERROR: invalid task query`，而 2.22 是接受的。两版都实测过：
+//
+//	2.22 + limit=50  -> 正常返回
+//	2.23 + limit=50  -> invalid task query
+//	2.23 + start=0   -> invalid task query
+//	2.23 + max/page_size/count -> 不报错，但也不保证生效（不认识就忽略）
+//
+// 所以这里**统一不发分页参数**，两版都能工作。代价是只能拿到节点默认页大小的
+// 任务；[sync.Poller] 会对"返回条数达到可疑上限"告警，避免任务一多就静默漏行
+// 而没人发现。
+//
+// 另外 `state_group` / `task_type` / `sort_key` 的值**必须大写**（小写同样
+// 触发 `invalid task query`），这几个是大小写敏感的枚举。
 func FetchTaskListParams(ctx context.Context, c *Client, p TaskListParams) (map[string]any, error) {
 	if err := c.EnsureLogin(ctx); err != nil {
 		return nil, err
 	}
+	stateGroup := p.StateGroup
+	if stateGroup == "" {
+		stateGroup = "ALL"
+	}
 	body := map[string]any{
-		"state_group": p.StateGroup,
+		"state_group": stateGroup,
 		"task_type":   "ALL",
 		"tag_filter":  "ALL",
 		"sort_key":    "Name",
 		"sort_order":  "ascend",
 		"keyword":     "",
-	}
-	if p.StateGroup == "" {
-		body["state_group"] = "ALL"
-	}
-	if p.Start > 0 {
-		body["start"] = p.Start
-	}
-	if p.Limit > 0 {
-		body["limit"] = p.Limit
 	}
 	return c.Call(ctx, "/api_v2/task_list/get", body)
 }
@@ -94,7 +105,10 @@ func ParseTaskList(resp map[string]any) []RemoteTask {
 			State:      firstString(m, "state", "status"),
 			Permillage: clampPermillage(firstInt(m, "permillage", "progress", "permil")),
 			TotalSize:  firstInt(m, "total_size", "totalSize", "selected_size"),
-			Downloaded: firstInt(m, "download_size", "downloaded_size", "downloaded"),
+			// `dl_size` 是 BitComet 2.2x 实际返回的字段名（真机抓包确认）。
+			// 只认 `download_size` / `downloaded_size` / `downloaded` 会让
+			// **进度永远显示 0**，而任务其实在跑 —— 实测踩到过。
+			Downloaded: firstInt(m, "dl_size", "download_size", "downloaded_size", "downloaded"),
 			Rate:       float64(firstInt(m, "download_rate", "download_speed", "speed")),
 			ErrorCode:  firstString(m, "error_code", "errorCode"),
 		})
